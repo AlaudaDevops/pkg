@@ -57,3 +57,8 @@ const (
 	ResourceTypesAttributeKey          = "resourceTypes"
 	MethodsAttributeKey                = "methods"
 )
+
+// Attribute keys for Triggers and Events
+const (
+	TriggeredByAnnotationKey         string = "katanomi.dev/triggeredBy"
+)
