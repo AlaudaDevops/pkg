@@ -190,3 +190,7 @@ func (m *ClusterRegistryClient) getConfigFromCluster(ctx context.Context, cluste
 	}
 	return
 }
+
+func (m *ClusterRegistryClient) ListClustersNamespaces(ctx context.Context, namespace string) (clusterNamespaces map[*corev1.ObjectReference][]corev1.Namespace, err error) {
+	return map[*corev1.ObjectReference][]corev1.Namespace{}, nil
+}
