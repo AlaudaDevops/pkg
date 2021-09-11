@@ -233,11 +233,11 @@ func GetLoggingConfig(ctx context.Context) (*logging.Config, error) {
 	// These timeout and retry interval are set by heuristics.
 	// e.g. istio sidecar needs a few seconds to configure the pod network.
 	var lastErr error
-	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
+	if err := wait.PollImmediate(1*time.Second, 15*time.Second, func() (bool, error) {
 		lastErr := directClt.Get(ctx, key, loggingConfigMap)
 		return lastErr == nil || apierrors.IsNotFound(lastErr), nil
 	}); err != nil {
-		return nil, fmt.Errorf("timed out waiting for the condition: %w", lastErr)
+		return nil, fmt.Errorf("timed out waiting for the condition: %w, err: %#v", lastErr, err)
 
 	}
 
