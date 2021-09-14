@@ -111,9 +111,11 @@ func App(name string) *AppBuilder {
 }
 
 func (a *AppBuilder) init() {
+	log := a.Logger.Named("krli")
 	a.Once.Do(func() {
 		a.Context = ctrl.SetupSignalHandler()
 		a.Context, a.Config = GetConfigOrDie(a.Context)
+		log.Infow("init config", "config", a.Config)
 		a.Context, a.startInformers = injection.EnableInjectionOrDie(a.Context, a.Config)
 
 		restyClient := resty.NewWithClient(http.DefaultClient).SetTimeout(time.Second * 10)
