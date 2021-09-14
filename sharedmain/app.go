@@ -141,6 +141,7 @@ func (a *AppBuilder) Scheme(scheme *runtime.Scheme) *AppBuilder {
 }
 
 func (a *AppBuilder) initClient(clientVar ctrlclient.Client) {
+	log := a.Logger.Named("krli")
 	a.initClientOnce.Do(func() {
 		if clientVar == nil {
 			cluster, err := ctrlcluster.New(a.Config, WithScheme(a.scheme))
@@ -148,11 +149,13 @@ func (a *AppBuilder) initClient(clientVar ctrlclient.Client) {
 				a.Logger.Fatalw("cluster client setup error", "err", err)
 			}
 			clientVar = cluster.GetClient()
+			log.Infow("init client", "clientVar", clientVar)
 			a.startFunc = append(a.startFunc, func(ctx context.Context) error {
 				return cluster.Start(ctx)
 			})
 			a.Context = kclient.WithCluster(a.Context, cluster)
 		}
+		log.Infow("init client", "clientVar", clientVar)
 		a.Context = kclient.WithClient(a.Context, clientVar)
 		dynamicClient, err := dynamic.NewForConfig(a.Config)
 		if err != nil {
@@ -440,15 +443,19 @@ func (a *AppBuilder) Run() error {
 	a.startInformers()
 
 	eg, egCtx := errgroup.WithContext(a.Context)
+	log := a.Logger.Named("krli")
 	for _, st := range a.startFunc {
 		startFunc := st
 		eg.Go(func() error {
-			return startFunc(egCtx)
+			err := startFunc(egCtx)
+			log.Infow("startFunc error", "err", err)
+			return err
 		})
 	}
 
 	// waituntil all are done
 	err := eg.Wait()
+	log.Infow("eg.Wait error", "err", err)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		a.Logger.Errorw("Error while running server", zap.Error(err))
 	}
