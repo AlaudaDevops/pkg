@@ -116,6 +116,10 @@ func (a *AppBuilder) init() {
 		a.Context = ctrl.SetupSignalHandler()
 		a.Context, a.Config = GetConfigOrDie(a.Context)
 		log.Infow("init config", "config", a.Config)
+		a.Config.QPS = 100
+		a.Config.Burst = 150
+		a.Config.Timeout = 120 * time.Second
+		log.Infow("new config", "config", a.Config)
 		a.Context, a.startInformers = injection.EnableInjectionOrDie(a.Context, a.Config)
 
 		restyClient := resty.NewWithClient(http.DefaultClient).SetTimeout(time.Second * 10)
