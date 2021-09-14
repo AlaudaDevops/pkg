@@ -111,15 +111,18 @@ func App(name string) *AppBuilder {
 }
 
 func (a *AppBuilder) init() {
-	log := a.Logger.Named("krli")
+	log, _ := zap.NewProduction()
+	defer log.Sync()
+	log = log.Named("krli")
+	sugar := log.Sugar()
 	a.Once.Do(func() {
 		a.Context = ctrl.SetupSignalHandler()
 		a.Context, a.Config = GetConfigOrDie(a.Context)
-		log.Infow("init config", "config", a.Config)
+		sugar.Infow("init config", "config", a.Config)
 		a.Config.QPS = 100
 		a.Config.Burst = 150
 		a.Config.Timeout = 120 * time.Second
-		log.Infow("new config", "config", a.Config)
+		sugar.Infow("new config", "config", a.Config)
 		a.Context, a.startInformers = injection.EnableInjectionOrDie(a.Context, a.Config)
 
 		restyClient := resty.NewWithClient(http.DefaultClient).SetTimeout(time.Second * 10)
