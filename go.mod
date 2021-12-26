@@ -35,7 +35,7 @@ require (
 	k8s.io/klog/v2 v2.5.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20210113233702-8566a335510f // indirect
 	knative.dev/pkg v0.0.0-20210730172132-bb4aaf09c430
-	sigs.k8s.io/controller-runtime v0.8.3
+	sigs.k8s.io/controller-runtime v0.11.0
 	sigs.k8s.io/yaml v1.2.0
 	yunion.io/x/log v0.0.0-20201210064738-43181789dc74 // indirect
 	yunion.io/x/pkg v0.0.0-20210218105412-13a69f60034c
