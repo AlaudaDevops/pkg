@@ -109,5 +109,9 @@ func (h *mutatingHandler) Handle(ctx context.Context, req admission.Request) adm
 	}
 
 	// Create the patch
-	return admission.PatchResponseFromRaw(req.Object.Raw, marshalled)
+	resp := admission.PatchResponseFromRaw(req.Object.Raw, marshalled)
+
+	logger := logging.FromContext(ctx)
+	logger.Infow("webhook-admission-defaulter", "resp.patchType", resp.PatchType, "resp.patchs", resp.Patches)
+	return resp
 }
