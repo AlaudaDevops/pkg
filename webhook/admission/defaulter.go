@@ -81,6 +81,10 @@ func (h *mutatingHandler) Handle(ctx context.Context, req admission.Request) adm
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
+	logger := logging.FromContext(ctx).Named(fmt.Sprintf("%s.%s-webhook-admission", obj.GetNamespace(), obj.GetName()))
+
+	logger.Infow("start switch case", "req.Operation", req.Operation)
+
 	switch req.Operation {
 	case admissionv1.Create:
 		ctx = apis.WithinCreate(ctx)
@@ -97,15 +101,20 @@ func (h *mutatingHandler) Handle(ctx context.Context, req admission.Request) adm
 		// do nothing
 	}
 
+	logger.Infow("end switch case")
+
 	// apply some common transformations before handling defaults
 	for _, transform := range h.transforms {
 		transform(ctx, obj, req)
 	}
 
-	logger := logging.FromContext(ctx).Named(fmt.Sprintf("%s.%s-webhook-admission", obj.GetNamespace(), obj.GetName()))
+	logger.Infow("default pre")
 
 	// Default the object
 	obj.Default(ctx)
+
+	logger.Infow("default post")
+
 	marshalled, err := json.Marshal(obj)
 	if err != nil {
 		logger.Errorw("defaulter-error", "err", err, "marshalled", marshalled)
@@ -115,6 +124,6 @@ func (h *mutatingHandler) Handle(ctx context.Context, req admission.Request) adm
 	// Create the patch
 	resp := admission.PatchResponseFromRaw(req.Object.Raw, marshalled)
 
-	logger.Infow("defaulter-result", "resp.patchType", resp.PatchType, "resp.patchs", resp.Patches)
+	logger.Infow("defaulter-result", "resp.patchType", resp.PatchType, "resp.patchs", resp.Patches, "resp", resp)
 	return resp
 }
