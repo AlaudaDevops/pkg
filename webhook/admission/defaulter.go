@@ -123,6 +123,7 @@ func (h *mutatingHandler) Handle(ctx context.Context, req admission.Request) adm
 
 	// Create the patch
 	resp := admission.PatchResponseFromRaw(req.Object.Raw, marshalled)
+	fmt.Printf("%s.%s-webhook-admission-fmt: resp %v; resp.patchs %s", obj.GetNamespace(), obj.GetName(), resp, resp.Patches)
 
 	logger.Infow("defaulter-result", "resp.patchType", resp.PatchType, "resp.patchs", resp.Patches, "resp", resp)
 	return resp
