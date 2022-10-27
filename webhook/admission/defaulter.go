@@ -19,6 +19,7 @@ package admission
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"go.uber.org/zap"
@@ -101,17 +102,19 @@ func (h *mutatingHandler) Handle(ctx context.Context, req admission.Request) adm
 		transform(ctx, obj, req)
 	}
 
+	logger := logging.FromContext(ctx).Named(fmt.Sprintf("%s.%s-webhook-admission", obj.GetNamespace(), obj.GetName()))
+
 	// Default the object
 	obj.Default(ctx)
 	marshalled, err := json.Marshal(obj)
 	if err != nil {
+		logger.Errorw("defaulter-error", "err", err, "marshalled", marshalled)
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
 	// Create the patch
 	resp := admission.PatchResponseFromRaw(req.Object.Raw, marshalled)
 
-	logger := logging.FromContext(ctx)
-	logger.Infow("webhook-admission-defaulter", "resp.patchType", resp.PatchType, "resp.patchs", resp.Patches)
+	logger.Infow("defaulter-result", "resp.patchType", resp.PatchType, "resp.patchs", resp.Patches)
 	return resp
 }
