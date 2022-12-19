@@ -25,6 +25,18 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// TestPlanLister list test plans
+type TestPlanLister interface {
+	Interface
+	ListTestPlans(ctx context.Context, params metav1alpha1.TestProjectOptions, option metav1alpha1.ListOptions) (*metav1alpha1.TestPlanList, error)
+}
+
+// TestPlanGetter get a test plan
+type TestPlanGetter interface {
+	Interface
+	GetTestPlan(ctx context.Context, params metav1alpha1.TestProjectOptions) (*metav1alpha1.TestPlan, error)
+}
+
 // ClientTestPlan client for test plan
 type ClientTestPlan interface {
 	List(ctx context.Context,

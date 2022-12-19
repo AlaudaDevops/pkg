@@ -24,6 +24,24 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// ProjectLister list project api
+type ProjectLister interface {
+	Interface
+	ListProjects(ctx context.Context, option metav1alpha1.ListOptions) (*metav1alpha1.ProjectList, error)
+}
+
+// ProjectGetter list project api
+type ProjectGetter interface {
+	Interface
+	GetProject(ctx context.Context, id string) (*metav1alpha1.Project, error)
+}
+
+// ProjectCreator create project api
+type ProjectCreator interface {
+	Interface
+	CreateProject(ctx context.Context, project *metav1alpha1.Project) (*metav1alpha1.Project, error)
+}
+
 type ClientProject interface {
 	List(ctx context.Context, baseURL *duckv1.Addressable, options ...OptionFunc) (*metav1alpha1.ProjectList, error)
 	Create(ctx context.Context, baseURL *duckv1.Addressable, project *metav1alpha1.Project, options ...OptionFunc) (*metav1alpha1.Project, error)

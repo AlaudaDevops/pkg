@@ -29,6 +29,16 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// GitRepositoryFileTreeGetter get git repository file tree
+type GitRepositoryFileTreeGetter interface {
+	Interface
+	GetGitRepositoryFileTree(
+		ctx context.Context,
+		repoOption metav1alpha1.GitRepoFileTreeOption,
+		listOption metav1alpha1.ListOptions,
+	) (metav1alpha1.GitRepositoryFileTree, error)
+}
+
 // ClientGitRepositoryFileTree defines the request interface for the file tree
 type ClientGitRepositoryFileTree interface {
 	GetGitRepositoryFileTree(

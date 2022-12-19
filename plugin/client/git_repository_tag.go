@@ -27,6 +27,25 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// GitRepositoryTagGetter get git repository Tag
+type GitRepositoryTagGetter interface {
+	Interface
+	GetGitRepositoryTag(
+		ctx context.Context,
+		option metav1alpha1.GitRepositoryTagOption,
+	) (metav1alpha1.GitRepositoryTag, error)
+}
+
+// GitRepositoryTagLister list git repository Tag
+type GitRepositoryTagLister interface {
+	Interface
+	ListGitRepositoryTag(
+		ctx context.Context,
+		option metav1alpha1.GitRepositoryTagListOption,
+		listOption metav1alpha1.ListOptions,
+	) (metav1alpha1.GitRepositoryTagList, error)
+}
+
 // ClientGitRepositoryTag client for repository tag
 type ClientGitRepositoryTag interface {
 	Get(ctx context.Context, baseURL *duckv1.Addressable, option metav1alpha1.GitRepositoryTagOption, options ...OptionFunc) (*metav1alpha1.GitRepositoryTag, error)

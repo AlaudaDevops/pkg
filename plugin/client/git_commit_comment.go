@@ -27,6 +27,22 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// GitCommitCommentLister list git commit comment
+type GitCommitCommentLister interface {
+	Interface
+	ListGitCommitComment(
+		ctx context.Context,
+		option metav1alpha1.GitCommitOption,
+		listOption metav1alpha1.ListOptions,
+	) (metav1alpha1.GitCommitCommentList, error)
+}
+
+// GitCommitCommentCreator create git commit comment
+type GitCommitCommentCreator interface {
+	Interface
+	CreateGitCommitComment(ctx context.Context, payload metav1alpha1.CreateCommitCommentPayload) (metav1alpha1.GitCommitComment, error)
+}
+
 type ClientGitCommitComment interface {
 	List(ctx context.Context, baseURL *duckv1.Addressable, option metav1alpha1.GitCommitOption, options ...OptionFunc) (*metav1alpha1.GitCommitCommentList, error)
 	Create(ctx context.Context, baseURL *duckv1.Addressable, payload metav1alpha1.CreateCommitCommentPayload, options ...OptionFunc) (*metav1alpha1.GitCommitComment, error)

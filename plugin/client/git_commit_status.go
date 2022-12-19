@@ -27,6 +27,22 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// GitCommitStatusLister list git commit status
+type GitCommitStatusLister interface {
+	Interface
+	ListGitCommitStatus(
+		ctx context.Context,
+		option metav1alpha1.GitCommitOption,
+		listOption metav1alpha1.ListOptions,
+	) (metav1alpha1.GitCommitStatusList, error)
+}
+
+// GitCommitStatusCreator create git commit status
+type GitCommitStatusCreator interface {
+	Interface
+	CreateGitCommitStatus(ctx context.Context, payload metav1alpha1.CreateCommitStatusPayload) (metav1alpha1.GitCommitStatus, error)
+}
+
 type ClientGitCommitStatus interface {
 	List(ctx context.Context, baseURL *duckv1.Addressable, option metav1alpha1.GitCommitOption, options ...OptionFunc) (*metav1alpha1.GitCommitStatusList, error)
 	Create(ctx context.Context, baseURL *duckv1.Addressable, payload metav1alpha1.CreateCommitStatusPayload, options ...OptionFunc) (*metav1alpha1.GitCommitStatus, error)

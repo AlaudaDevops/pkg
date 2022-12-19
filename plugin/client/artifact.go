@@ -25,6 +25,30 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// ArtifactLister list artifact
+type ArtifactLister interface {
+	Interface
+	ListArtifacts(ctx context.Context, params metav1alpha1.ArtifactOptions, option metav1alpha1.ListOptions) (*metav1alpha1.ArtifactList, error)
+}
+
+// ArtifactGetter get artifact detail
+type ArtifactGetter interface {
+	Interface
+	GetArtifact(ctx context.Context, params metav1alpha1.ArtifactOptions) (*metav1alpha1.Artifact, error)
+}
+
+// ArtifactDeleter delete artifact
+type ArtifactDeleter interface {
+	Interface
+	DeleteArtifact(ctx context.Context, params metav1alpha1.ArtifactOptions) error
+}
+
+// ArtifactTagDeleter delete a specific tag of the artifact.
+type ArtifactTagDeleter interface {
+	Interface
+	DeleteArtifactTag(ctx context.Context, params metav1alpha1.ArtifactTagOptions) error
+}
+
 type ClientArtifact interface {
 	Get(ctx context.Context, baseURL *duckv1.Addressable, project string, repository string, artifact string, options ...OptionFunc) (*metav1alpha1.Artifact, error)
 	List(ctx context.Context, baseURL *duckv1.Addressable, project string, repository string, options ...OptionFunc) (*metav1alpha1.ArtifactList, error)

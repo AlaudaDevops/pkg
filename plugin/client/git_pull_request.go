@@ -28,6 +28,18 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// GitPullRequestHandler list, get and create pr function
+type GitPullRequestHandler interface {
+	Interface
+	ListGitPullRequest(
+		ctx context.Context,
+		option metav1alpha1.GitPullRequestListOption,
+		listOption metav1alpha1.ListOptions,
+	) (metav1alpha1.GitPullRequestList, error)
+	GetGitPullRequest(ctx context.Context, option metav1alpha1.GitPullRequestOption) (metav1alpha1.GitPullRequest, error)
+	CreatePullRequest(ctx context.Context, payload metav1alpha1.CreatePullRequestPayload) (metav1alpha1.GitPullRequest, error)
+}
+
 // ClientGitPullRequest is interface for Create and Read pull requests
 // Deprecated: Integrations should implement GitPullRequestCRUClient instead (or additionally).
 //

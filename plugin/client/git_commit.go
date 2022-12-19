@@ -28,6 +28,22 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// GitCommitGetter get git commit
+type GitCommitGetter interface {
+	Interface
+	GetGitCommit(ctx context.Context, option metav1alpha1.GitCommitOption) (metav1alpha1.GitCommit, error)
+}
+
+// GitCommitLister List git commit
+type GitCommitLister interface {
+	Interface
+	ListGitCommit(
+		ctx context.Context,
+		option metav1alpha1.GitCommitListOption,
+		listOption metav1alpha1.ListOptions,
+	) (metav1alpha1.GitCommitList, error)
+}
+
 // ClientGitCommit client for commit
 type ClientGitCommit interface {
 	Get(ctx context.Context, baseURL *duckv1.Addressable, option metav1alpha1.GitCommitOption, options ...OptionFunc) (*metav1alpha1.GitCommit, error)

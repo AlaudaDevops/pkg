@@ -27,6 +27,23 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// GitRepositoryLister list git repository
+type GitRepositoryLister interface {
+	Interface
+	ListGitRepository(
+		ctx context.Context,
+		id, keyword string,
+		subtype metav1alpha1.ProjectSubType,
+		listOption metav1alpha1.ListOptions,
+	) (metav1alpha1.GitRepositoryList, error)
+}
+
+// GitRepositoryGetter get git repository
+type GitRepositoryGetter interface {
+	Interface
+	GetGitRepository(ctx context.Context, repoOption metav1alpha1.GitRepo) (metav1alpha1.GitRepository, error)
+}
+
 // ClientGitRepository client for repo
 type ClientGitRepository interface {
 	List(ctx context.Context, baseURL *duckv1.Addressable, project, keyword string, subtype metav1alpha1.ProjectSubType, options ...OptionFunc) (*metav1alpha1.GitRepositoryList, error)

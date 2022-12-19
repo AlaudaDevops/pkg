@@ -28,6 +28,18 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// GitRepoFileGetter used to get a file content
+type GitRepoFileGetter interface {
+	Interface
+	GetGitRepoFile(ctx context.Context, option metav1alpha1.GitRepoFileOption) (metav1alpha1.GitRepoFile, error)
+}
+
+// GitRepoFileCreator used to create a file, gogs don't support
+type GitRepoFileCreator interface {
+	Interface
+	CreateGitRepoFile(ctx context.Context, payload metav1alpha1.CreateRepoFilePayload) (metav1alpha1.GitCommit, error)
+}
+
 //go:generate ../../bin/mockgen -source=gitcontent.go -destination=../../testing/mock/github.com/katanomi/pkg/plugin/client/gitcontent.go -package=client ClientGitContent
 type ClientGitContent interface {
 	Get(ctx context.Context, baseURL *duckv1.Addressable, option metav1alpha1.GitRepoFileOption, options ...OptionFunc) (*metav1alpha1.GitRepoFile, error)

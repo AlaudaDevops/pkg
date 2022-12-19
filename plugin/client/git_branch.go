@@ -27,6 +27,24 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// GitBranchLister List git branch
+type GitBranchLister interface {
+	Interface
+	ListGitBranch(ctx context.Context, branchOption metav1alpha1.GitBranchOption, option metav1alpha1.ListOptions) (metav1alpha1.GitBranchList, error)
+}
+
+// GitBranchGetter get git branch
+type GitBranchGetter interface {
+	Interface
+	GetGitBranch(ctx context.Context, repoOption metav1alpha1.GitRepo, branch string) (metav1alpha1.GitBranch, error)
+}
+
+// GitBranchCreator create git branch,github, gogs don't support create branch
+type GitBranchCreator interface {
+	Interface
+	CreateGitBranch(ctx context.Context, payload metav1alpha1.CreateBranchPayload) (metav1alpha1.GitBranch, error)
+}
+
 // ClientGitBranch client for branch
 type ClientGitBranch interface {
 	List(ctx context.Context, baseURL *duckv1.Addressable, repo metav1alpha1.GitBranchOption, options ...OptionFunc) (*metav1alpha1.GitBranchList, error)

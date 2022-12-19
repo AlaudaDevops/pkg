@@ -27,6 +27,15 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+type CodeQualityGetter interface {
+	Interface
+	GetCodeQuality(ctx context.Context, projectKey string) (*metav1alpha1.CodeQuality, error)
+	GetCodeQualityOverviewByBranch(ctx context.Context, opt metav1alpha1.CodeQualityBaseOption) (*metav1alpha1.CodeQuality, error)
+	GetCodeQualityLineCharts(ctx context.Context, opt metav1alpha1.CodeQualityLineChartOption) (*metav1alpha1.CodeQualityLineChart, error)
+	GetOverview(ctx context.Context) (*metav1alpha1.CodeQualityProjectOverview, error)
+	GetSummaryByTaskID(ctx context.Context, opt metav1alpha1.CodeQualityTaskOption) (*metav1alpha1.CodeQualityTaskMetrics, error)
+}
+
 type ClientCodeQuality interface {
 	Get(ctx context.Context, baseURL *duckv1.Addressable, projectKey string, options ...OptionFunc) (*metav1alpha1.CodeQuality, error)
 	GetOverview(ctx context.Context, baseURL *duckv1.Addressable, options ...OptionFunc) (*metav1alpha1.CodeQualityProjectOverview, error)

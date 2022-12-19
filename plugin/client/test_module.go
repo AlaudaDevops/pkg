@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Katanomi Authors.
+Copyright 2022 The Katanomi Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,28 +25,25 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
-// RepositoryLister list repository
-type RepositoryLister interface {
+// TestModuleLister list a test module
+type TestModuleLister interface {
 	Interface
-	ListRepositories(
-		ctx context.Context,
-		params metav1alpha1.RepositoryOptions,
-		option metav1alpha1.ListOptions,
-	) (*metav1alpha1.RepositoryList, error)
+	ListTestModules(ctx context.Context, params metav1alpha1.TestProjectOptions, options metav1alpha1.ListOptions) (*metav1alpha1.TestModuleList, error)
 }
 
-type ClientRepository interface {
-	List(ctx context.Context, baseURL *duckv1.Addressable, project string, options ...OptionFunc) (*metav1alpha1.RepositoryList, error)
+// ClientTestModule client for test module
+type ClientTestModule interface {
+	List(ctx context.Context, baseURL *duckv1.Addressable, params metav1alpha1.TestProjectOptions, options ...OptionFunc) (*metav1alpha1.TestModuleList, error)
 }
 
-type repository struct {
+type testModule struct {
 	client Client
 	meta   Meta
 	secret corev1.Secret
 }
 
-func newRepository(client Client, meta Meta, secret corev1.Secret) ClientRepository {
-	return &repository{
+func newTestModule(client Client, meta Meta, secret corev1.Secret) ClientTestModule {
+	return &testModule{
 		client: client,
 		meta:   meta,
 		secret: secret,
@@ -54,10 +51,10 @@ func newRepository(client Client, meta Meta, secret corev1.Secret) ClientReposit
 }
 
 // List get project using plugin
-func (p *repository) List(ctx context.Context, baseURL *duckv1.Addressable, project string, options ...OptionFunc) (*metav1alpha1.RepositoryList, error) {
-	list := &metav1alpha1.RepositoryList{}
+func (p *testModule) List(ctx context.Context, baseURL *duckv1.Addressable, params metav1alpha1.TestProjectOptions, options ...OptionFunc) (*metav1alpha1.TestModuleList, error) {
+	list := &metav1alpha1.TestModuleList{}
 
-	uri := fmt.Sprintf("projects/%s/repositories", project)
+	uri := fmt.Sprintf("projects/%s/testplans/%s/testmodules", params.Project, params.TestPlanID)
 	options = append(options, MetaOpts(p.meta), SecretOpts(p.secret), ResultOpts(list))
 	if err := p.client.Get(ctx, baseURL, uri, options...); err != nil {
 		return nil, err

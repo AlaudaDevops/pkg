@@ -23,21 +23,12 @@ import (
 	restfulspec "github.com/emicklei/go-restful-openapi/v2"
 	"github.com/emicklei/go-restful/v3"
 	"github.com/katanomi/pkg/plugin/client"
-	"github.com/katanomi/pkg/plugin/component/metrics"
-	"github.com/katanomi/pkg/plugin/component/tracing"
 )
 
 const (
 	// Defines the query key value for the search.
 	SearchQueryKey = "name"
 )
-
-var DefaultFilters = []restful.FilterFunction{
-	tracing.Filter,
-	metrics.Filter,
-	client.AuthFilter,
-	client.MetaFilter,
-}
 
 // GetPluginWebPath returns a plugin
 func GetPluginWebPath(c client.Interface) string {

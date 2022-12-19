@@ -25,6 +25,18 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
+// TestCaseExecutionLister list test case executions
+type TestCaseExecutionLister interface {
+	Interface
+	ListTestCaseExecutions(ctx context.Context, params metav1alpha1.TestProjectOptions, options metav1alpha1.ListOptions) (*metav1alpha1.TestCaseExecutionList, error)
+}
+
+// TestCaseExecutionCreator create a new test case execution
+type TestCaseExecutionCreator interface {
+	Interface
+	CreateTestCaseExecution(ctx context.Context, params metav1alpha1.TestProjectOptions, payload metav1alpha1.TestCaseExecution) (*metav1alpha1.TestCaseExecution, error)
+}
+
 // ClientTestCaseExecution client for test case execution
 type ClientTestCaseExecution interface {
 	List(ctx context.Context,

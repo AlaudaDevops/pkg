@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Katanomi Authors.
+Copyright 2021 The Katanomi Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,39 +18,41 @@ package client
 
 import (
 	"context"
-	"fmt"
 
 	metav1alpha1 "github.com/katanomi/pkg/apis/meta/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 )
 
-// ClientTestModule client for test module
-type ClientTestModule interface {
-	List(ctx context.Context, baseURL *duckv1.Addressable, params metav1alpha1.TestProjectOptions, options ...OptionFunc) (*metav1alpha1.TestModuleList, error)
+type BlobStoreLister interface {
+	Interface
+	ListBlobStores(ctx context.Context, listOption metav1alpha1.ListOptions) (*metav1alpha1.BlobStoreList, error)
 }
 
-type testModule struct {
+type ClientBlobStore interface {
+	List(ctx context.Context, baseURL *duckv1.Addressable, options ...OptionFunc) (*metav1alpha1.BlobStoreList, error)
+}
+
+type blobStore struct {
 	client Client
 	meta   Meta
 	secret corev1.Secret
 }
 
-func newTestModule(client Client, meta Meta, secret corev1.Secret) ClientTestModule {
-	return &testModule{
+func newBlobStore(client Client, meta Meta, secret corev1.Secret) ClientBlobStore {
+	return &blobStore{
 		client: client,
 		meta:   meta,
 		secret: secret,
 	}
 }
 
-// List get project using plugin
-func (p *testModule) List(ctx context.Context, baseURL *duckv1.Addressable, params metav1alpha1.TestProjectOptions, options ...OptionFunc) (*metav1alpha1.TestModuleList, error) {
-	list := &metav1alpha1.TestModuleList{}
+// List get blob stores using plugin
+func (p *blobStore) List(ctx context.Context, baseURL *duckv1.Addressable, options ...OptionFunc) (*metav1alpha1.BlobStoreList, error) {
+	list := &metav1alpha1.BlobStoreList{}
 
-	uri := fmt.Sprintf("projects/%s/testplans/%s/testmodules", params.Project, params.TestPlanID)
 	options = append(options, MetaOpts(p.meta), SecretOpts(p.secret), ResultOpts(list))
-	if err := p.client.Get(ctx, baseURL, uri, options...); err != nil {
+	if err := p.client.Get(ctx, baseURL, "blobStores", options...); err != nil {
 		return nil, err
 	}
 
