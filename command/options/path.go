@@ -42,6 +42,16 @@ func (p *ResultPathOption) AddFlags(flags *pflag.FlagSet) {
 	flags.StringVar(&p.ResultPath, "result-path", "", `the path to save task results`)
 }
 
+// WorkingDirPathOption describe working path option
+type WorkingDirPathOption struct {
+	WorkingDirPath string
+}
+
+// AddFlags add flags to options
+func (p *WorkingDirPathOption) AddFlags(flags *pflag.FlagSet) {
+	flags.StringVar(&p.WorkingDirPath, "working-dir-path", "", `the path stores value of working dir`)
+}
+
 // KatanomiPathOption describe katanomi path option
 type KatanomiPathOption struct {
 	SharePath  string
