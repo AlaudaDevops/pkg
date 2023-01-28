@@ -48,6 +48,7 @@ type Manager struct {
 
 // NewManager initializes a new manager based on func
 func NewManager(ctx context.Context, get GetConfigFunc, baseConfig GetBaseConfigFunc) *Manager {
+
 	if get == nil {
 		get = FromBearerToken
 	}
@@ -70,7 +71,20 @@ func NewManager(ctx context.Context, get GetConfigFunc, baseConfig GetBaseConfig
 
 // Filter returns a filter to be used in
 func (m *Manager) Filter(ctx context.Context) restful.FilterFunction {
+
 	return ManagerFilter(ctx, m)
+	//return func(request *restful.Request, response *restful.Response, chain *restful.FilterChain) {
+	//	log := logging.FromContext(ctx)
+	//	ManagerFilter(ctx, m)(request, response, chain)
+	//	log.Infof("======> debug: out manager filter")
+	//
+	//	//impersonateFilter, err := ImpersonateFilter(ctx, nil)
+	//	//if err != nil {
+	//	//	kerrors.HandleError(request, response, err)
+	//	//}
+	//	//log.Infof("======> debug: will in filter")
+	//	//impersonateFilter(request, response, chain)
+	//}
 }
 
 // ManagerFilter generates filter based on a manager to create a config based in a request and injects into context
@@ -81,7 +95,7 @@ func ManagerFilter(ctx context.Context, mgr *Manager) restful.FilterFunction {
 
 	return func(req *restful.Request, resp *restful.Response, chain *restful.FilterChain) {
 		start := time.Now()
-
+		log.Infof("======> debug: in manager filter")
 		config, err := mgr.GetConfig(req, mgr.GetBasicConfig)
 		log.Debugw("ManagerFilter, got config", "totalElapsed", time.Since(start).String())
 		step := time.Now()
@@ -91,13 +105,14 @@ func ManagerFilter(ctx context.Context, mgr *Manager) restful.FilterFunction {
 			return
 		}
 
-		ctx := req.Request.Context()
+		reqCtx := req.Request.Context()
 
 		// setting defaults to the config
 		config.Burst = DefaultBurst
 		config.QPS = DefaultQPS
 		config.Timeout = DefaultTimeout
-		ctx = injection.WithConfig(ctx, config)
+
+		reqCtx = injection.WithConfig(reqCtx, config)
 
 		directClient, err := client.New(config, client.Options{Scheme: scheme, Mapper: serviceAccountClient.RESTMapper()})
 		log.Debugw("ManagerFilter, got direct client", "totalElapsed", time.Since(start).String(), "elapsed", time.Since(step).String())
@@ -107,7 +122,7 @@ func ManagerFilter(ctx context.Context, mgr *Manager) restful.FilterFunction {
 			kerrors.HandleError(req, resp, err)
 			return
 		}
-		ctx = WithClient(ctx, directClient)
+		reqCtx = WithClient(reqCtx, directClient)
 
 		dynamicClient, err := dynamic.NewForConfig(config)
 		log.Debugw("ManagerFilter, got dynamic client", "totalElapsed", time.Since(start).String(), "elapsed", time.Since(step).String())
@@ -116,9 +131,9 @@ func ManagerFilter(ctx context.Context, mgr *Manager) restful.FilterFunction {
 			kerrors.HandleError(req, resp, err)
 			return
 		}
-		ctx = WithDynamicClient(ctx, dynamicClient)
+		reqCtx = WithDynamicClient(reqCtx, dynamicClient)
 
-		req.Request = req.Request.WithContext(ctx)
+		req.Request = req.Request.WithContext(reqCtx)
 
 		log.Debugw("config,client,dynamicclient context done", "totalElapsed", time.Since(start).String())
 		chain.ProcessFilter(req, resp)

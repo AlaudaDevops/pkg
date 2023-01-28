@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/client-go/dynamic"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -106,4 +107,20 @@ func Cluster(ctx context.Context) cluster.Cluster {
 		return nil
 	}
 	return val.(cluster.Cluster)
+}
+
+type userCtxKey struct{}
+
+// WithUser sets a cluster.Cluster instance into a context
+func WithUser(ctx context.Context, user user.Info) context.Context {
+	return context.WithValue(ctx, userCtxKey{}, user)
+}
+
+// User returns a user.Info, returns nil if not found
+func User(ctx context.Context) user.Info {
+	val := ctx.Value(userCtxKey{})
+	if val == nil {
+		return nil
+	}
+	return val.(user.Info)
 }

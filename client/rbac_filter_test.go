@@ -19,6 +19,8 @@ package client
 import (
 	"context"
 
+	"k8s.io/apiserver/pkg/authentication/user"
+
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -45,18 +47,42 @@ func TestRBACFilter(t *testing.T) {
 		g := NewGomegaWithT(t)
 		ctx := context.TODO()
 
-		err := SelfSubjectAccessReviewForResource(ctx, "def", "default", attr, true)
+		client := Client(ctx)
+		review := makeSelfSubjectAccessReview("default", "def", attr)
+		err := postSubjectAccessReview(ctx, client, review)
+
 		g.Expect(err).ToNot(BeNil())
 		g.Expect(errors.IsUnauthorized(err)).To(BeTrue())
 
 	})
-	t.Run("adding fake client in request", func(t *testing.T) {
+	t.Run("adding fake client in ctx", func(t *testing.T) {
 		g := NewGomegaWithT(t)
 		ctx := context.TODO()
 		clt := fake.NewClientBuilder().WithScheme(scheme).Build()
 		ctx = WithClient(ctx, clt)
 
-		err := SelfSubjectAccessReviewForResource(ctx, "xyz", "default", attr, true)
+		client := Client(ctx)
+		review := makeSelfSubjectAccessReview("default", "xyz", attr)
+		err := postSubjectAccessReview(ctx, client, review)
+
+		g.Expect(err).ToNot(BeNil())
+		g.Expect(errors.IsForbidden(err)).To(BeTrue())
+	})
+	t.Run("adding fake client in ctx", func(t *testing.T) {
+		g := NewGomegaWithT(t)
+		ctx := context.TODO()
+		clt := fake.NewClientBuilder().WithScheme(scheme).Build()
+		ctx = WithClient(ctx, clt)
+
+		client := Client(ctx)
+		user := &user.DefaultInfo{
+			Name:   "system:serviceaccount:default:katanomi",
+			Groups: []string{"system:authenticated"},
+			UID:    "39f88a8e-9090-4495-830c-fabf0d0cc7a3",
+		}
+		review := makeSubjectAccessReview("default", "xyz", attr, user)
+		err := postSubjectAccessReview(ctx, client, review)
+
 		g.Expect(err).ToNot(BeNil())
 		g.Expect(errors.IsForbidden(err)).To(BeTrue())
 	})
