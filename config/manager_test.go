@@ -21,6 +21,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -221,5 +222,47 @@ func TestIsSameConfigMap(t *testing.T) {
 		sameConfig := corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: system.Namespace()}}
 		g.Expect(manager.isSameConfigMap(&sameConfig)).To(Equal(false), "when manager is nil, return false")
 	})
+}
 
+func TestUpdateConfig(t *testing.T) {
+	t.Run("Is same object update.", func(t *testing.T) {
+		g := NewGomegaWithT(t)
+		client := fake.NewSimpleClientset()
+		watcher := informer.NewInformedWatcher(client, "cm")
+		manager := NewManager(watcher, nil, "cm")
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "cm", Namespace: system.Namespace()},
+			Data:       map[string]string{"test": "value"},
+		}
+		manager.applyConfig(cm)
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "cm", Namespace: system.Namespace()},
+			Data:       map[string]string{"test": "change"},
+		}
+
+		manager.UpdateConfig(cm)
+
+		g.Expect(cmp.Diff(manager.Data, map[string]string{"test": "change"})).To(BeEmpty())
+
+	})
+
+	t.Run("Isn't same object update.", func(t *testing.T) {
+		g := NewGomegaWithT(t)
+		client := fake.NewSimpleClientset()
+		watcher := informer.NewInformedWatcher(client, "cm")
+		manager := NewManager(watcher, nil, "cm")
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "cm", Namespace: system.Namespace()},
+			Data:       map[string]string{"test": "value"},
+		}
+		manager.applyConfig(cm)
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: system.Namespace()},
+			Data:       map[string]string{"test": "change"},
+		}
+
+		manager.UpdateConfig(cm)
+
+		g.Expect(cmp.Diff(manager.Data, map[string]string{"test": "value"})).To(BeEmpty())
+	})
 }

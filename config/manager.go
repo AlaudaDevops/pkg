@@ -98,15 +98,30 @@ func (manager *Manager) GetConfig() *Config {
 	return manager.Config
 }
 
+// GetConfig used to update the config file managed by the manager.
+// when the watch cannot update the configuration in time, it can be
+// updated manually through the current function.
+func (manager *Manager) UpdateConfig(cm *corev1.ConfigMap) {
+	if !manager.isSameConfigMap(cm) {
+		return
+	}
+
+	manager.applyConfig(cm)
+	return
+}
+
 // GetFeatureFlag get the function switch data, if the function switch is not set,
 // return the default value of the switch.
 func (manager *Manager) GetFeatureFlag(flag string) FeatureValue {
 	defaultValue := defaultFeatureValue[flag]
-	if manager == nil {
+	if manager == nil || manager.Config == nil {
 		return defaultValue
 	}
 
-	if value, ok := manager.Data[flag]; ok {
+	manager.lock.Lock()
+	value, ok := manager.Data[flag]
+	manager.lock.Unlock()
+	if ok {
 		return FeatureValue(value)
 	}
 	return defaultValue

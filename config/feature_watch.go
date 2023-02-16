@@ -99,6 +99,9 @@ func predicatesUpdateFunc(manager *Manager, featureChanged HasFeatureChangedFunc
 			featureChanged = defaultFeatureChanged
 		}
 
+		// Update configuration files manually. the update of the watch may be later than the time trigger.
+		manager.UpdateConfig(new)
+
 		newConfig := &FeatureFlags{Data: new.Data}
 		oldConfig := &FeatureFlags{Data: old.Data}
 		return featureChanged(newConfig, oldConfig)
