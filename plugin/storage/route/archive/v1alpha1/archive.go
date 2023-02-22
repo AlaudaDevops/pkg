@@ -18,6 +18,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"context"
 	"net/http"
 
 	restfulspec "github.com/emicklei/go-restful-openapi/v2"
@@ -49,7 +50,7 @@ func NewArchive(impl archivev1alpha1.ArchiveCapable) storage.VersionedRouter {
 	}
 }
 
-func (a *archive) Register(ws *restful.WebService) {
+func (a *archive) Register(ctx context.Context, ws *restful.WebService) error {
 	storagePluginParam := ws.PathParameter("storageplugin", "storage plugin to be used")
 	ws.Route(
 		ws.POST("storageplugin/{storageplugin}/records").To(a.ListRecords).
@@ -100,6 +101,8 @@ func (a *archive) Register(ws *restful.WebService) {
 			Metadata(restfulspec.KeyOpenAPITags, a.tags).
 			Returns(http.StatusOK, "OK", &v1alpha1.AggregateResult{}),
 	)
+
+	return nil
 }
 
 // ListRecords to get archive record list

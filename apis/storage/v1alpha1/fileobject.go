@@ -16,21 +16,14 @@ limitations under the License.
 
 package v1alpha1
 
-import (
-	"strings"
+import authv1 "k8s.io/api/authorization/v1"
 
-	"github.com/katanomi/pkg/encoding"
-)
-
-// ParseFileKey returns pluginName and fileObjectName
-func ParseFileKey(key string) (pluginName, fileObjectName string) {
-	keySplit := strings.Split(key, ":")
-	if len(keySplit) == 2 {
-		return keySplit[0], keySplit[1]
+// FileObjectResourceAttributes returns a ResourceAttribute object to be used in a filter
+func FileObjectResourceAttributes(verb string) authv1.ResourceAttributes {
+	return authv1.ResourceAttributes{
+		Group:    GroupVersion.Group,
+		Version:  GroupVersion.Version,
+		Resource: "fileobjects",
+		Verb:     verb,
 	}
-	return "", ""
-}
-
-func (fileMeta *FileMeta) DecodeBy(fileMetaBase64 string) error {
-	return encoding.Base64Decode(fileMetaBase64, fileMeta)
 }

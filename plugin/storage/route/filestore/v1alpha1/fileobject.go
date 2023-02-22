@@ -17,9 +17,12 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strconv"
+
+	kclient "github.com/katanomi/pkg/client"
 
 	restfulspec "github.com/emicklei/go-restful-openapi/v2"
 	"github.com/emicklei/go-restful/v3"
@@ -49,12 +52,24 @@ func (a *fileObject) GroupVersion() schema.GroupVersion {
 	return filestorev1alpha1.FileStoreV1alpha1GV
 }
 
-func (a *fileObject) Register(ws *restful.WebService) {
+func (a *fileObject) Register(ctx context.Context, ws *restful.WebService) error {
 	storagePluginParam := ws.PathParameter("storagePlugin", "storage plugin to be used")
 	objectNameParam := ws.PathParameter("objectName", "file object name in storage tools")
 	fileTypeParam := ws.QueryParameter("fileType", "business type of file")
+
+	if manager := kclient.ManagerCtx(ctx); manager != nil {
+		filters, err := manager.Filters(ctx)
+		if err != nil {
+			return err
+		}
+		for _, filter := range filters {
+			ws = ws.Filter(filter)
+		}
+	}
+
 	ws.Route(
 		ws.PUT("storageplugin/{storagePlugin}/fileobjects/{objectName:*}").To(a.PutFileObject).
+			Filter(kclient.SubjectReviewFilterForResource(ctx, v1alpha1.FileObjectResourceAttributes("update"), "", "")).
 			AllowedMethodsWithoutContentType([]string{http.MethodPut}).
 			Produces(restful.MIME_OCTET).
 			Doc("Storage plugin put raw file").
@@ -65,6 +80,7 @@ func (a *fileObject) Register(ws *restful.WebService) {
 
 	ws.Route(
 		ws.GET("storageplugin/{storagePlugin}/fileobjects/{objectName:*}").To(a.GetFileObject).
+			Filter(kclient.SubjectReviewFilterForResource(ctx, v1alpha1.FileObjectResourceAttributes("get"), "", "")).
 			AllowedMethodsWithoutContentType([]string{http.MethodGet}).
 			Doc("Storage plugin get raw file").
 			Param(storagePluginParam).Param(objectNameParam).Param(fileTypeParam).
@@ -74,12 +90,14 @@ func (a *fileObject) Register(ws *restful.WebService) {
 
 	ws.Route(
 		ws.DELETE("storageplugin/{storagePlugin}/fileobjects/{objectName:*}").To(a.DeleteFileObject).
+			Filter(kclient.SubjectReviewFilterForResource(ctx, v1alpha1.FileObjectResourceAttributes("delete"), "", "")).
 			Doc("Storage plugin delete file by key").
 			Param(storagePluginParam).Param(objectNameParam).Param(fileTypeParam).
 			Metadata(restfulspec.KeyOpenAPITags, a.tags).
 			Returns(http.StatusOK, "OK", v1alpha1.FileMeta{}),
 	)
 
+	return nil
 }
 
 // PutFileObject is handler of put file object
