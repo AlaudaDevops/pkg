@@ -40,9 +40,15 @@ var DefaultFilters = []restful.FilterFunction{
 	client.MetaFilter,
 }
 
+const RoutePerfix = "alauda-devops"
+
 // GetPluginWebPath returns a plugin
 func GetPluginWebPath(c client.Interface) string {
-	return fmt.Sprintf("/plugins/v1alpha1/%s", strings.TrimPrefix(c.Path(), "/"))
+	perfix := "/plugins/v1alpha1"
+	if RoutePerfix != "" {
+		perfix = fmt.Sprintf("%s/%s", strings.TrimPrefix(RoutePerfix, "/"), strings.TrimPrefix(perfix, "/"))
+	}
+	return fmt.Sprintf("%s/%s", perfix, strings.TrimPrefix(c.Path(), "/"))
 }
 
 // Route a service should implement register func to register go restful webservice
