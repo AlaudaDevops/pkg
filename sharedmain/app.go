@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -632,9 +633,19 @@ func (a *AppBuilder) Run(startFuncs ...func(context.Context) error) error {
 		// adds profiling and health checks
 		a.container.Add(route.NewDefaultService(a.Context))
 
+
 		if len(a.container.RegisteredWebServices()) > 0 {
+			if  os.Getenv("SAVE_OPENAPI") != "" {
+				doc := route.GetOpenAPIDefinition(a.container.RegisteredWebServices()...)
+				data, _  := json.Marshal(doc)
+				if err := os.WriteFile(os.Getenv("SAVE_OPENAPI"), data, 660); err != nil {
+					panic(err)
+				}
+				os.Exit(0)
+			}
 			a.container.Add(route.NewDocService(a.container.RegisteredWebServices()...))
 		}
+
 
 		a.startFunc = append(a.startFunc, func(ctx context.Context) error {
 			// TODO: find a better way to get this configuration

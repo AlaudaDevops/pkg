@@ -26,6 +26,7 @@ import (
 	"github.com/katanomi/pkg/plugin/client"
 	"github.com/katanomi/pkg/plugin/component/metrics"
 	"github.com/katanomi/pkg/plugin/component/tracing"
+	"github.com/go-openapi/spec"
 )
 
 const (
@@ -529,4 +530,14 @@ func NewDocService(webservices ...*restful.WebService) *restful.WebService {
 		APIPath:     "/openapi.json",
 	}
 	return restfulspec.NewOpenAPIService(config)
+}
+
+
+// GetOpenAPIDefinition return Swagger definition base on list of webservices
+func GetOpenAPIDefinition(webservices ...*restful.WebService) *spec.Swagger {
+	config := restfulspec.Config{
+		WebServices: webservices,
+		APIPath:     "/openapi.json",
+	}
+	return restfulspec.BuildSwagger(config)
 }
