@@ -57,15 +57,6 @@ type GitPullRequestOption struct {
 	Index int `json:"Index"`
 }
 
-type PullRequestState string
-
-const (
-	PullRequestOpenedState PullRequestState = "opened"
-	PullRequestClosedState PullRequestState = "closed"
-	PullRequestMergedState PullRequestState = "merged"
-	PullRequestAllState    PullRequestState = "all"
-)
-
 type GitPullRequestListOption struct {
 	GitRepo
 	// State indicattes pullrequest state

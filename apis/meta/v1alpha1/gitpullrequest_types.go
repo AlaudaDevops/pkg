@@ -66,6 +66,23 @@ type GitPullRequest struct {
 	Spec GitPullRequestSpec `json:"spec"`
 }
 
+type PullRequestState string
+
+const (
+	// PullRequestOpenedState indicates that the pull request is open and under consideration.
+	PullRequestOpenedState = "open"
+
+	// PullRequestMergedState indicates that the pull request has been successfully merged into the target branch.
+	PullRequestMergedState = "merged"
+
+	// PullRequestClosedState indicates that the pull request has been closed without being merged.
+	PullRequestClosedState = "closed"
+
+	// PullRequestAllState is not an actual state of a pull request.
+	// It is used to select pull requests of all states, including open, merged, and closed.
+	PullRequestAllState PullRequestState = "all"
+)
+
 // GitPullRequestSpec spec for pull request
 type GitPullRequestSpec struct {
 	GitRepo
@@ -76,7 +93,7 @@ type GitPullRequestSpec struct {
 	// Title pr title
 	Title string `json:"title"`
 	// State pr state (different between platforms)
-	State string `json:"state"`
+	State PullRequestState `json:"state"`
 	// CreatedAt pr create time
 	CreatedAt metav1.Time `json:"createdAt"`
 	// UpdateAt pr latest update time
