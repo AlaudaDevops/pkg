@@ -43,6 +43,7 @@ require (
 
 require (
 	github.com/alessio/shellescape v1.4.1
+	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/k1LoW/duration v1.2.0
 	github.com/minio/minio-go/v7 v7.0.47
 	github.com/mitchellh/mapstructure v1.5.0
@@ -154,7 +155,6 @@ require (
 )
 
 require (
-	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/openzipkin/zipkin-go v0.4.3 // indirect
 	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
 )
