@@ -19,7 +19,7 @@ require (
 	github.com/onsi/gomega v1.34.1
 	github.com/prometheus/client_golang v1.19.1
 	go.uber.org/zap v1.27.0
-	golang.org/x/sync v0.11.0
+	golang.org/x/sync v0.14.0
 	golang.org/x/time v0.6.0
 	k8s.io/api v0.31.0
 	k8s.io/apimachinery v0.31.0
@@ -43,6 +43,7 @@ require (
 
 require (
 	github.com/alessio/shellescape v1.4.1
+	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/k1LoW/duration v1.2.0
 	github.com/minio/minio-go/v7 v7.0.47
 	github.com/mitchellh/mapstructure v1.5.0
@@ -53,7 +54,7 @@ require (
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/pflag v1.0.5
 	golang.org/x/exp v0.0.0-20240808152545-0cdaa3abc0fa
-	golang.org/x/net v0.36.0
+	golang.org/x/net v0.40.0
 	k8s.io/cli-runtime v0.31.0
 	k8s.io/klog/v2 v2.130.1
 )
@@ -127,11 +128,11 @@ require (
 	go.starlark.net v0.0.0-20230525235612-a134d8f9ddca // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.35.0 // indirect
+	golang.org/x/crypto v0.38.0 // indirect
 	golang.org/x/oauth2 v0.22.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/term v0.29.0 // indirect
-	golang.org/x/text v0.22.0 // indirect
+	golang.org/x/sys v0.33.0 // indirect
+	golang.org/x/term v0.32.0 // indirect
+	golang.org/x/text v0.25.0 // indirect
 	golang.org/x/tools v0.26.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
 	google.golang.org/api v0.183.0 // indirect
@@ -154,7 +155,6 @@ require (
 )
 
 require (
-	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/openzipkin/zipkin-go v0.4.3 // indirect
 	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
 )
