@@ -26,7 +26,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 
 	"github.com/AlaudaDevops/pkg/tracing"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v4"
 	"k8s.io/client-go/dynamic"
 
 	kerrors "github.com/AlaudaDevops/pkg/errors"
