@@ -46,6 +46,8 @@ type ParamSpec struct {
 	Properties map[string]PropertySpec `json:"properties,omitempty"`
 	// Default is the value a parameter takes if no input value is supplied.
 	// +optional
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:validation:XPreserveUnknownFields
 	Default *ParamValue `json:"default,omitempty"`
 	// Enum declares a set of allowed param input values.
 	// If Enum is not set, no input validation is performed for the param.
@@ -176,7 +178,9 @@ func findDups(vals []string) sets.Set[string] {
 
 // Param declares an ParamValues to use for the parameter called name.
 type Param struct {
-	Name  string     `json:"name"`
+	Name string `json:"name"`
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:validation:XPreserveUnknownFields
 	Value ParamValue `json:"value"`
 }
 
