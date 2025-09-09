@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -624,6 +625,9 @@ func (a *AppBuilder) Run(startFuncs ...func(context.Context) error) error {
 			srv := &http.Server{
 				Addr:    fmt.Sprintf(":%d", WebServerPort),
 				Handler: a.container,
+				BaseContext: func(listener net.Listener) context.Context {
+					return a.Context
+				},
 			}
 			return srv.ListenAndServe()
 		})
