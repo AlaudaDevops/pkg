@@ -123,7 +123,7 @@ crd-docs: crd-ref-docs
 		--output-mode=group \
 		--max-depth=$(CRD_DOCS_MAX_DEPTH)
 
-CONTROLLER_TOOLS_VERSION ?= v0.14.0
+CONTROLLER_TOOLS_VERSION ?= v0.18.0
 CONTROLLER_GEN = $(TOOLBIN)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
 controller-gen: ##@Setup Download controller-gen locally if necessary.
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
@@ -133,7 +133,7 @@ KUSTOMIZE = $(TOOLBIN)/kustomize-$(KUSTOMIZE_VERSION)
 kustomize: ##@Setup Download kustomize locally if necessary.
 	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
 
-KO_VERSION ?= v0.15.2
+KO_VERSION ?= v0.18.0
 KO = $(TOOLBIN)/ko-$(KO_VERSION)
 ko: ##@Setup Download ko locally if necessary.
 	$(call go-install-tool,$(KO),github.com/google/ko,$(KO_VERSION))
@@ -177,7 +177,7 @@ govulncheck: ##@Setup Download govulncheck locally if necessary.
 # using master until 1.0.5 is released, https://github.com/golang/go/issues/66139
 	$(call go-install-tool,$(GOVULNCHECK),golang.org/x/vuln/cmd/govulncheck,$(GOVULNCHECK_VERSION))
 
-TRIVY_VERSION ?= 0.50.1
+TRIVY_VERSION ?= 0.64.1
 TRIVY = $(TOOLBIN)/trivy-$(TRIVY_VERSION)
 trivy: ##@Setup Download trivy locally if necessary.
 	$(call download-trivy,$(TRIVY),$(TRIVY_VERSION))
