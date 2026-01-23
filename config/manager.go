@@ -207,16 +207,16 @@ func Name() string {
 	return defaultConfig
 }
 
-type katanomiConfigKey struct{}
+type configKey struct{}
 
-// WithKatanomiConfigManager sets a Config Manager instance into a context
-func WithKatanomiConfigManager(ctx context.Context, manager *Manager) context.Context {
-	return context.WithValue(ctx, katanomiConfigKey{}, manager)
+// WithConfigManager sets a Config Manager instance into a context
+func WithConfigManager(ctx context.Context, manager *Manager) context.Context {
+	return context.WithValue(ctx, configKey{}, manager)
 }
 
-// KatanomiConfigManager returns a Config Manager, returns nil if not found
-func KatanomiConfigManager(ctx context.Context) *Manager {
-	val := ctx.Value(katanomiConfigKey{})
+// ConfigManager returns a Config Manager, returns nil if not found
+func ConfigManager(ctx context.Context) *Manager {
+	val := ctx.Value(configKey{})
 	if val == nil {
 		return nil
 	}
