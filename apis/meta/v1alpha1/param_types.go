@@ -53,6 +53,11 @@ type ParamSpec struct {
 	// If Enum is not set, no input validation is performed for the param.
 	// +optional
 	Enum []string `json:"enum,omitempty"`
+
+	// Annotations is an unstructured key value map stored with a resource that may be
+	// set by external tools to store and retrieve arbitrary metadata.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // ParamSpecs is a list of ParamSpec
