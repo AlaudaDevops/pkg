@@ -1,0 +1,22 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: devops-pkg
+  title: DevOps Pkg
+  description: Shared Go library providing common packages for DevOps components, including APIs, clients, validation, testing utilities, and controller helpers.
+  annotations:
+    # github plugin
+    github.com/project-slug: AlaudaDevops/pkg
+    acp.cpaas.io/instance: edge.alauda.cn
+    # sonarqube plugin
+    sonarqube.org/project-key: github.com-AlaudaDevops-pkg
+    acp.cpaas.io/owner: jtcheng@alauda.io
+
+    # 组件属性，区别是否部署时必带的核心组件,可选值为 core 和 plugin。
+    acp.cpaas.io/functional-attributes: core
+
+spec:
+  type: library
+  system: system:alauda-devops-system
+  lifecycle: production
+  owner: devops
