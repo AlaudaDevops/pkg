@@ -26,6 +26,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +37,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apiserver/pkg/authentication/user"
 	apiserverrequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/client-go/rest"
 )
 
 // fakeTokenReviewer returns a configured TokenReview status for tests.
@@ -251,6 +253,72 @@ func TestAuthenticatorKubernetesFallback(t *testing.T) {
 	}
 	if got := fmt.Sprintf("%v", reviewer.audiences); got != "[kubernetes]" {
 		t.Fatalf("audiences = %s, want [kubernetes]", got)
+	}
+}
+
+// TestKubernetesTokenReviewerLazyInitIsConcurrentSafe verifies concurrent fallback reviewer initialization.
+func TestKubernetesTokenReviewerLazyInitIsConcurrentSafe(t *testing.T) {
+	authenticator, err := NewAuthenticator(Config{}, WithKubernetesRESTConfig(&rest.Config{
+		Host: "https://example.com",
+	}))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	const goroutines = 32
+	start := make(chan struct{})
+	reviewers := make([]TokenReviewer, goroutines)
+	errs := make([]error, goroutines)
+	var wg sync.WaitGroup
+
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		index := i
+		go func() {
+			defer wg.Done()
+			<-start
+			reviewers[index], errs[index] = authenticator.kubernetesTokenReviewer()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	first := reviewers[0]
+	if first == nil {
+		t.Fatalf("reviewer[0] is nil")
+	}
+	for index, err := range errs {
+		if err != nil {
+			t.Fatalf("kubernetesTokenReviewer() error at %d = %v", index, err)
+		}
+		if reviewers[index] != first {
+			t.Fatalf("reviewer[%d] = %p, want %p", index, reviewers[index], first)
+		}
+	}
+}
+
+// TestKubernetesTokenReviewerLazyInitCachesError verifies failed lazy initialization is not retried.
+func TestKubernetesTokenReviewerLazyInitCachesError(t *testing.T) {
+	authenticator, err := NewAuthenticator(Config{})
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	_, firstErr := authenticator.kubernetesTokenReviewer()
+	if firstErr == nil {
+		t.Fatalf("kubernetesTokenReviewer() error = nil, want REST config error")
+	}
+
+	authenticator.restConfig = &rest.Config{Host: "https://example.com"}
+	reviewer, secondErr := authenticator.kubernetesTokenReviewer()
+	if secondErr == nil {
+		t.Fatalf("kubernetesTokenReviewer() error = nil, want cached REST config error")
+	}
+	if secondErr != firstErr {
+		t.Fatalf("second error = %v, want cached error %v", secondErr, firstErr)
+	}
+	if reviewer != nil {
+		t.Fatalf("reviewer = %v, want nil", reviewer)
 	}
 }
 

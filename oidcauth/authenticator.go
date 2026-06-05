@@ -64,8 +64,11 @@ type Authenticator struct {
 	restConfig    *rest.Config
 	tokenReviewer TokenReviewer
 
-	verifierMu sync.Mutex
-	verifier   *oidc.IDTokenVerifier
+	// tokenReviewerOnce protects lazy TokenReviewer initialization.
+	tokenReviewerOnce sync.Once
+	tokenReviewerErr  error
+	verifierMu        sync.Mutex
+	verifier          *oidc.IDTokenVerifier
 }
 
 // AuthenticatorOption customizes an Authenticator.
@@ -221,16 +224,23 @@ func (a *Authenticator) oidcVerifier(ctx context.Context) (*oidc.IDTokenVerifier
 
 // kubernetesTokenReviewer returns the configured or lazily constructed TokenReview backend.
 func (a *Authenticator) kubernetesTokenReviewer() (TokenReviewer, error) {
-	if a.tokenReviewer != nil {
-		return a.tokenReviewer, nil
+	a.tokenReviewerOnce.Do(func() {
+		if a.tokenReviewer != nil {
+			return
+		}
+		if a.restConfig == nil {
+			a.tokenReviewerErr = fmt.Errorf("Kubernetes REST config is required for TokenReview fallback")
+			return
+		}
+		reviewer, err := NewCurrentClusterTokenReviewer(a.restConfig)
+		if err != nil {
+			a.tokenReviewerErr = err
+			return
+		}
+		a.tokenReviewer = reviewer
+	})
+	if a.tokenReviewerErr != nil {
+		return nil, a.tokenReviewerErr
 	}
-	if a.restConfig == nil {
-		return nil, fmt.Errorf("Kubernetes REST config is required for TokenReview fallback")
-	}
-	reviewer, err := NewCurrentClusterTokenReviewer(a.restConfig)
-	if err != nil {
-		return nil, err
-	}
-	a.tokenReviewer = reviewer
 	return a.tokenReviewer, nil
 }
