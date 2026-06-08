@@ -359,6 +359,164 @@ func TestAuthenticatorOIDC(t *testing.T) {
 	}
 }
 
+// TestConfigHTTPClientUsesOIDCRequestTimeout verifies default clients carry a bounded timeout.
+func TestConfigHTTPClientUsesOIDCRequestTimeout(t *testing.T) {
+	client, err := Config{OIDCRequestTimeout: 75 * time.Millisecond}.HTTPClient()
+	if err != nil {
+		t.Fatalf("HTTPClient() error = %v", err)
+	}
+	if client.Timeout != 75*time.Millisecond {
+		t.Fatalf("timeout = %v, want 75ms", client.Timeout)
+	}
+
+	defaultClient, err := Config{}.HTTPClient()
+	if err != nil {
+		t.Fatalf("HTTPClient() error = %v", err)
+	}
+	if defaultClient.Timeout != defaultOIDCRequestTimeout {
+		t.Fatalf("default timeout = %v, want %v", defaultClient.Timeout, defaultOIDCRequestTimeout)
+	}
+}
+
+// TestNewAuthenticatorAddsOIDCRequestTimeoutToCustomHTTPClient verifies custom clients get a safe default copy.
+func TestNewAuthenticatorAddsOIDCRequestTimeoutToCustomHTTPClient(t *testing.T) {
+	timeout := 75 * time.Millisecond
+	client := &http.Client{}
+	authenticator, err := NewAuthenticator(Config{OIDCRequestTimeout: timeout}, WithHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+	if client.Timeout != 0 {
+		t.Fatalf("original client timeout = %v, want 0", client.Timeout)
+	}
+	if authenticator.httpClient == client {
+		t.Fatalf("authenticator reused a custom client without timeout")
+	}
+	if authenticator.httpClient.Timeout != timeout {
+		t.Fatalf("authenticator timeout = %v, want %v", authenticator.httpClient.Timeout, timeout)
+	}
+
+	configuredClient := &http.Client{Timeout: time.Second}
+	configuredAuthenticator, err := NewAuthenticator(Config{OIDCRequestTimeout: timeout}, WithHTTPClient(configuredClient))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+	if configuredAuthenticator.httpClient != configuredClient {
+		t.Fatalf("authenticator replaced a custom client that already has a timeout")
+	}
+	if configuredAuthenticator.httpClient.Timeout != time.Second {
+		t.Fatalf("configured timeout = %v, want 1s", configuredAuthenticator.httpClient.Timeout)
+	}
+}
+
+// TestAuthenticatorOIDCDiscoveryUsesRequestTimeout verifies discovery cannot block forever.
+func TestAuthenticatorOIDCDiscoveryUsesRequestTimeout(t *testing.T) {
+	release := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(_ http.ResponseWriter, req *http.Request) {
+		select {
+		case <-req.Context().Done():
+		case <-release:
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	defer close(release)
+
+	authenticator, err := NewAuthenticator(Config{
+		IssuerURL:          server.URL,
+		OIDCRequestTimeout: 25 * time.Millisecond,
+	}, WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	resultCh := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		_, err := authenticator.Authenticate(context.Background(), "token")
+		resultCh <- err
+	}()
+
+	select {
+	case err := <-resultCh:
+		if !apierrors.IsServiceUnavailable(err) {
+			t.Fatalf("Authenticate() error = %v, want service unavailable", err)
+		}
+		if elapsed := time.Since(started); elapsed > time.Second {
+			t.Fatalf("Authenticate() elapsed = %v, want bounded by OIDC timeout", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("Authenticate() did not return within the OIDC timeout")
+	}
+}
+
+// TestAuthenticatorOIDCJWKSUsesRequestTimeout verifies JWKS refresh cannot block forever.
+func TestAuthenticatorOIDCJWKSUsesRequestTimeout(t *testing.T) {
+	now := time.Unix(2000, 0)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+
+	release := make(chan struct{})
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	defer close(release)
+
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"issuer":                                server.URL,
+			"jwks_uri":                              server.URL + "/keys",
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	})
+	mux.HandleFunc("/keys", func(_ http.ResponseWriter, req *http.Request) {
+		select {
+		case <-req.Context().Done():
+		case <-release:
+		}
+	})
+
+	rawToken := signedOIDCToken(t, key, jwt.MapClaims{
+		"iss":                server.URL,
+		"sub":                "sub-1",
+		"aud":                "client",
+		"preferred_username": "dev",
+		"exp":                now.Add(time.Hour).Unix(),
+		"iat":                now.Unix(),
+	})
+	authenticator, err := NewAuthenticator(Config{
+		IssuerURL:          server.URL,
+		Audiences:          []string{"client"},
+		Now:                func() time.Time { return now },
+		OIDCRequestTimeout: 25 * time.Millisecond,
+	}, WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	resultCh := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		_, err := authenticator.Authenticate(context.Background(), rawToken)
+		resultCh <- err
+	}()
+
+	select {
+	case err := <-resultCh:
+		if !apierrors.IsServiceUnavailable(err) {
+			t.Fatalf("Authenticate() error = %v, want service unavailable", err)
+		}
+		if elapsed := time.Since(started); elapsed > time.Second {
+			t.Fatalf("Authenticate() elapsed = %v, want bounded by OIDC timeout", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("Authenticate() did not return within the OIDC timeout")
+	}
+}
+
 // TestAuthenticatorOIDCVerifierDoesNotCacheRequestContextValues verifies cached JWKS clients avoid request-scoped values.
 func TestAuthenticatorOIDCVerifierDoesNotCacheRequestContextValues(t *testing.T) {
 	now := time.Unix(2000, 0)

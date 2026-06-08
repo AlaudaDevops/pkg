@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -111,7 +112,19 @@ func NewAuthenticator(config Config, opts ...AuthenticatorOption) (*Authenticato
 		}
 		authenticator.httpClient = client
 	}
+	authenticator.httpClient = oidcHTTPClientWithTimeout(authenticator.httpClient, config.oidcRequestTimeout())
 	return authenticator, nil
+}
+
+// oidcHTTPClientWithTimeout returns an HTTP client that has a timeout for OIDC upstream requests.
+func oidcHTTPClientWithTimeout(client *http.Client, timeout time.Duration) *http.Client {
+	if client == nil || client.Timeout > 0 {
+		return client
+	}
+
+	copied := *client
+	copied.Timeout = timeout
+	return &copied
 }
 
 // Authenticate validates a bearer token and returns a Kubernetes identity.
@@ -137,7 +150,10 @@ func (a *Authenticator) authenticateOIDC(ctx context.Context, rawToken string) (
 		return nil, apierrors.NewServiceUnavailable(fmt.Sprintf("OIDC discovery failed: %v", err))
 	}
 
-	oidcCtx := oidc.ClientContext(ctx, a.httpClient)
+	verifyCtx, cancel := context.WithTimeout(ctx, a.Config.oidcRequestTimeout())
+	defer cancel()
+
+	oidcCtx := oidc.ClientContext(verifyCtx, a.httpClient)
 	idToken, err := verifier.Verify(oidcCtx, rawToken)
 	if err != nil {
 		if strings.Contains(err.Error(), "fetching keys") {
@@ -207,12 +223,18 @@ func (a *Authenticator) oidcVerifier(ctx context.Context) (*oidc.IDTokenVerifier
 		return a.verifier, nil
 	}
 
-	oidcCtx := oidc.ClientContext(ctx, a.httpClient)
+	discoveryCtx, cancel := context.WithTimeout(ctx, a.Config.oidcRequestTimeout())
+	defer cancel()
+
+	oidcCtx := oidc.ClientContext(discoveryCtx, a.httpClient)
 	provider, err := oidc.NewProvider(oidcCtx, a.Config.IssuerURL)
 	if err != nil {
 		return nil, err
 	}
-	a.verifier = provider.Verifier(&oidc.Config{
+	// go-oidc stores the verifier context as a configuration bag for JWKS requests.
+	// Use a background context so request-scoped values are not cached in the verifier.
+	jwksCtx := oidc.ClientContext(context.Background(), a.httpClient)
+	a.verifier = provider.VerifierContext(jwksCtx, &oidc.Config{
 		// Signature, issuer, JWKS, and signing algorithm checks still run in go-oidc.
 		// Audience and time claims are skipped here because ValidateVerifiedClaims
 		// applies the package-level multi-audience and configurable clock-skew rules.

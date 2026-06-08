@@ -55,6 +55,8 @@ const (
 const (
 	// defaultClockSkew is the default token time validation leeway.
 	defaultClockSkew = 2 * time.Minute
+	// defaultOIDCRequestTimeout is the default bound for OIDC discovery and JWKS requests.
+	defaultOIDCRequestTimeout = 30 * time.Second
 )
 
 // KubernetesFallbackPolicy controls whether Kubernetes TokenReview fallback is used when OIDC is not configured.
@@ -84,6 +86,8 @@ type Config struct {
 	CAFile string
 	// CAData is optional PEM CA data for OIDC discovery and JWKS requests.
 	CAData []byte
+	// OIDCRequestTimeout bounds OIDC discovery and JWKS HTTP requests.
+	OIDCRequestTimeout time.Duration
 	// ClockSkew is the allowed token time validation leeway.
 	ClockSkew time.Duration
 	// Now returns the current time for validation and tests.
@@ -101,6 +105,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.ClockSkew == 0 {
 		c.ClockSkew = defaultClockSkew
+	}
+	if c.OIDCRequestTimeout <= 0 {
+		c.OIDCRequestTimeout = defaultOIDCRequestTimeout
 	}
 }
 
@@ -171,8 +178,12 @@ func (l *GlobalInfoLoader) Load(ctx context.Context) (*GlobalInfoConfig, error) 
 
 // HTTPClient builds an HTTP client for OIDC discovery and JWKS requests.
 func (c Config) HTTPClient() (*http.Client, error) {
+	timeout := c.oidcRequestTimeout()
 	if c.CAFile == "" && len(c.CAData) == 0 {
-		return http.DefaultClient, nil
+		return &http.Client{
+			Transport: http.DefaultTransport,
+			Timeout:   timeout,
+		}, nil
 	}
 
 	pool, err := x509.SystemCertPool()
@@ -199,5 +210,14 @@ func (c Config) HTTPClient() (*http.Client, error) {
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{RootCAs: pool},
 		},
+		Timeout: timeout,
 	}, nil
+}
+
+// oidcRequestTimeout returns the configured OIDC request timeout or the package default.
+func (c Config) oidcRequestTimeout() time.Duration {
+	if c.OIDCRequestTimeout > 0 {
+		return c.OIDCRequestTimeout
+	}
+	return defaultOIDCRequestTimeout
 }
