@@ -151,110 +151,152 @@ func oidcHTTPClientWithTimeout(client *http.Client, timeout time.Duration) *http
 
 // Authenticate validates a bearer token and returns a Kubernetes identity.
 func (a *Authenticator) Authenticate(ctx context.Context, rawToken string) (*AuthenticationResult, error) {
-	rawToken = strings.TrimSpace(rawToken)
-	if rawToken == "" {
-		return nil, apierrors.NewUnauthorized("a Bearer token must be provided")
+	rawToken, err := normalizeBearerToken(rawToken)
+	if err != nil {
+		return nil, err
 	}
 
-	failures := []backendFailure{}
-	if a.Config.PlatformAuthenticationEnabled() {
-		result, err := a.authenticatePlatform(ctx, rawToken)
-		if err == nil {
-			logging.FromContext(ctx).Infow("request authentication backend succeeded", "source", AuthenticationSourcePlatform, "user", result.User.GetName())
-			return result, nil
-		}
-		logging.FromContext(ctx).Warnw("request authentication backend failed", "source", AuthenticationSourcePlatform, "error", err)
-		failures = append(failures, backendFailure{source: AuthenticationSourcePlatform, err: err})
-	} else {
-		logging.FromContext(ctx).Debugw("request authentication backend skipped", "source", AuthenticationSourcePlatform, "reason", "disabled or missing platformURL/clusterName")
-	}
-
-	if a.Config.OIDCAuthenticationEnabled() {
-		result, err := a.authenticateOIDC(ctx, rawToken)
-		if err == nil {
-			logging.FromContext(ctx).Infow("request authentication backend succeeded", "source", AuthenticationSourceOIDC, "user", result.User.GetName())
-			return result, nil
-		}
-		logging.FromContext(ctx).Warnw("request authentication backend failed", "source", AuthenticationSourceOIDC, "error", err)
-		failures = append(failures, backendFailure{source: AuthenticationSourceOIDC, err: err})
-	} else {
-		logging.FromContext(ctx).Debugw("request authentication backend skipped", "source", AuthenticationSourceOIDC, "reason", "disabled")
-	}
-
-	if a.Config.KubernetesFallbackEnabled() {
-		result, err := a.authenticateKubernetes(ctx, rawToken)
-		if err == nil {
-			logging.FromContext(ctx).Infow("request authentication backend succeeded", "source", AuthenticationSourceKubernetes, "user", result.User.GetName())
-			return result, nil
-		}
-		logging.FromContext(ctx).Warnw("request authentication backend failed", "source", AuthenticationSourceKubernetes, "error", err)
-		failures = append(failures, backendFailure{source: AuthenticationSourceKubernetes, err: err})
-	} else {
-		logging.FromContext(ctx).Debugw("request authentication backend skipped", "source", AuthenticationSourceKubernetes, "reason", "disabled")
-	}
-
-	return nil, authenticationFailureError(failures)
+	return runAuthenticationBackends(ctx, rawToken, "request authentication", a.authenticationBackends())
 }
 
 // AuthenticateAndAuthorize authenticates a bearer token and checks one access request.
 func (a *Authenticator) AuthenticateAndAuthorize(ctx context.Context, rawToken string, attrs *AccessAttributes, reviewer SubjectAccessReviewer) (*AuthenticationResult, error) {
-	rawToken = strings.TrimSpace(rawToken)
-	if rawToken == "" {
-		return nil, apierrors.NewUnauthorized("a Bearer token must be provided")
+	rawToken, err := normalizeBearerToken(rawToken)
+	if err != nil {
+		return nil, err
 	}
 	if attrs == nil || (attrs.ResourceAttributes == nil && attrs.NonResourceAttributes == nil) {
 		return nil, fmt.Errorf("access attributes are nil")
 	}
 
+	return runAuthenticationBackends(ctx, rawToken, "request authentication and authorization", a.accessBackends(attrs, reviewer))
+}
+
+// authenticationBackend stores one ordered authentication backend invocation.
+type authenticationBackend struct {
+	// source identifies the backend in logs and aggregate errors.
+	source AuthenticationSource
+	// enabled records whether this backend should be attempted.
+	enabled bool
+	// skipReason explains why a disabled backend is skipped.
+	skipReason string
+	// authenticate validates the token and returns a Kubernetes identity.
+	authenticate func(context.Context, string) (*AuthenticationResult, error)
+	// authorize optionally authorizes a successfully authenticated identity.
+	authorize func(context.Context, string, *AuthenticationResult) error
+	// terminalAuthorizationFailure keeps platform authorization denial final.
+	terminalAuthorizationFailure bool
+}
+
+// authenticationBackends returns the ordered authentication-only backend chain.
+func (a *Authenticator) authenticationBackends() []authenticationBackend {
+	return []authenticationBackend{
+		{
+			source:       AuthenticationSourcePlatform,
+			enabled:      a.Config.PlatformAuthenticationEnabled(),
+			skipReason:   "disabled or missing platformURL/clusterName",
+			authenticate: a.authenticatePlatform,
+		},
+		{
+			source:       AuthenticationSourceOIDC,
+			enabled:      a.Config.OIDCAuthenticationEnabled(),
+			skipReason:   "disabled",
+			authenticate: a.authenticateOIDC,
+		},
+		{
+			source:       AuthenticationSourceKubernetes,
+			enabled:      a.Config.KubernetesFallbackEnabled(),
+			skipReason:   "disabled",
+			authenticate: a.authenticateKubernetes,
+		},
+	}
+}
+
+// accessBackends returns the ordered authentication and authorization backend chain.
+func (a *Authenticator) accessBackends(attrs *AccessAttributes, reviewer SubjectAccessReviewer) []authenticationBackend {
+	return []authenticationBackend{
+		{
+			source:       AuthenticationSourcePlatform,
+			enabled:      a.Config.PlatformAuthenticationEnabled(),
+			skipReason:   "disabled or missing platformURL/clusterName",
+			authenticate: a.authenticatePlatform,
+			authorize: func(ctx context.Context, rawToken string, _ *AuthenticationResult) error {
+				return a.authorizePlatform(ctx, rawToken, attrs)
+			},
+			terminalAuthorizationFailure: true,
+		},
+		currentClusterAccessBackend(AuthenticationSourceOIDC, a.Config.OIDCAuthenticationEnabled(), a.authenticateOIDC, attrs, reviewer),
+		currentClusterAccessBackend(AuthenticationSourceKubernetes, a.Config.KubernetesFallbackEnabled(), a.authenticateKubernetes, attrs, reviewer),
+	}
+}
+
+// currentClusterAccessBackend builds an access backend authorized by SubjectAccessReview.
+func currentClusterAccessBackend(source AuthenticationSource, enabled bool, authenticate func(context.Context, string) (*AuthenticationResult, error), attrs *AccessAttributes, reviewer SubjectAccessReviewer) authenticationBackend {
+	return authenticationBackend{
+		source:       source,
+		enabled:      enabled,
+		skipReason:   "disabled",
+		authenticate: authenticate,
+		authorize: func(ctx context.Context, _ string, result *AuthenticationResult) error {
+			return reviewAuthenticatedAccess(ctx, reviewer, result.User, attrs)
+		},
+	}
+}
+
+// runAuthenticationBackends executes enabled backends until one succeeds.
+func runAuthenticationBackends(ctx context.Context, rawToken string, operation string, backends []authenticationBackend) (*AuthenticationResult, error) {
 	failures := []backendFailure{}
-	if a.Config.PlatformAuthenticationEnabled() {
-		result, err := a.authenticatePlatform(ctx, rawToken)
-		if err != nil {
-			logging.FromContext(ctx).Warnw("request authentication backend failed", "source", AuthenticationSourcePlatform, "error", err)
-			failures = append(failures, backendFailure{source: AuthenticationSourcePlatform, err: err})
-		} else {
-			if err := a.authorizePlatform(ctx, rawToken, attrs); err != nil {
-				logging.FromContext(ctx).Warnw("request authorization backend failed", "source", AuthenticationSourcePlatform, "user", result.User.GetName(), "error", err)
+	for _, backend := range backends {
+		if !backend.enabled {
+			logging.FromContext(ctx).Debugw(operation+" backend skipped", "source", backend.source, "reason", backend.skipReason)
+			continue
+		}
+
+		result, err := backend.authenticate(ctx, rawToken)
+		if err == nil {
+			err = validateAuthenticationResult(result)
+		}
+		if err == nil && backend.authorize != nil {
+			err = backend.authorize(ctx, rawToken, result)
+			if err != nil && backend.terminalAuthorizationFailure {
+				logging.FromContext(ctx).Warnw("request authorization backend failed", "source", backend.source, "user", authenticationResultUserName(result), "error", err)
 				return nil, err
 			}
-			logging.FromContext(ctx).Infow("request authentication and authorization backend succeeded", "source", AuthenticationSourcePlatform, "user", result.User.GetName())
+		}
+		if err == nil {
+			logging.FromContext(ctx).Infow(operation+" backend succeeded", "source", backend.source, "user", authenticationResultUserName(result))
 			return result, nil
 		}
-	} else {
-		logging.FromContext(ctx).Debugw("request authentication and authorization backend skipped", "source", AuthenticationSourcePlatform, "reason", "disabled or missing platformURL/clusterName")
-	}
 
-	if a.Config.OIDCAuthenticationEnabled() {
-		result, err := a.authenticateOIDC(ctx, rawToken)
-		if err == nil {
-			err = reviewAuthenticatedAccess(ctx, reviewer, result.User, attrs)
-		}
-		if err == nil {
-			logging.FromContext(ctx).Infow("request authentication and authorization backend succeeded", "source", AuthenticationSourceOIDC, "user", result.User.GetName())
-			return result, nil
-		}
-		logging.FromContext(ctx).Warnw("request authentication and authorization backend failed", "source", AuthenticationSourceOIDC, "error", err)
-		failures = append(failures, backendFailure{source: AuthenticationSourceOIDC, err: err})
-	} else {
-		logging.FromContext(ctx).Debugw("request authentication and authorization backend skipped", "source", AuthenticationSourceOIDC, "reason", "disabled")
+		logging.FromContext(ctx).Warnw(operation+" backend failed", "source", backend.source, "error", err)
+		failures = append(failures, backendFailure{source: backend.source, err: err})
 	}
-
-	if a.Config.KubernetesFallbackEnabled() {
-		result, err := a.authenticateKubernetes(ctx, rawToken)
-		if err == nil {
-			err = reviewAuthenticatedAccess(ctx, reviewer, result.User, attrs)
-		}
-		if err == nil {
-			logging.FromContext(ctx).Infow("request authentication and authorization backend succeeded", "source", AuthenticationSourceKubernetes, "user", result.User.GetName())
-			return result, nil
-		}
-		logging.FromContext(ctx).Warnw("request authentication and authorization backend failed", "source", AuthenticationSourceKubernetes, "error", err)
-		failures = append(failures, backendFailure{source: AuthenticationSourceKubernetes, err: err})
-	} else {
-		logging.FromContext(ctx).Debugw("request authentication and authorization backend skipped", "source", AuthenticationSourceKubernetes, "reason", "disabled")
-	}
-
 	return nil, authenticationFailureError(failures)
+}
+
+// normalizeBearerToken trims a raw token and rejects empty credentials.
+func normalizeBearerToken(rawToken string) (string, error) {
+	rawToken = strings.TrimSpace(rawToken)
+	if rawToken == "" {
+		return "", apierrors.NewUnauthorized("a Bearer token must be provided")
+	}
+	return rawToken, nil
+}
+
+// validateAuthenticationResult rejects backends that did not return a user.
+func validateAuthenticationResult(result *AuthenticationResult) error {
+	if result == nil || result.User == nil {
+		return apierrors.NewUnauthorized("request authentication did not return a user")
+	}
+	return nil
+}
+
+// authenticationResultUserName returns the authenticated username for logging.
+func authenticationResultUserName(result *AuthenticationResult) string {
+	if result == nil || result.User == nil {
+		return ""
+	}
+	return result.User.GetName()
 }
 
 // authenticatePlatform validates a token through platform SelfSubjectReview.

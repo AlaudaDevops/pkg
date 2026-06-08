@@ -25,7 +25,6 @@ import (
 	authv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apiserver/pkg/authentication/user"
-	apiserverrequest "k8s.io/apiserver/pkg/endpoints/request"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -147,15 +146,7 @@ func NewSubjectAccessReviewFilter(authenticator TokenAuthenticator, reviewer Sub
 				kerrors.HandleError(req, resp, err)
 				return
 			}
-			if result == nil || result.User == nil {
-				kerrors.HandleError(req, resp, apierrors.NewUnauthorized("request authentication did not return a user"))
-				return
-			}
-
-			reqCtx := apiserverrequest.WithUser(req.Request.Context(), result.User)
-			reqCtx = WithAuthenticationResult(reqCtx, result)
-			req.Request = req.Request.WithContext(reqCtx)
-			chain.ProcessFilter(req, resp)
+			processAuthenticatedRequest(req, resp, chain, result)
 			return
 		}
 

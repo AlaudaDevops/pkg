@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +37,7 @@ import (
 	authnv1 "k8s.io/api/authentication/v1"
 	authv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/authentication/user"
 	apiserverrequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/rest"
@@ -110,6 +112,56 @@ func (r *fakeSubjectAccessReviewer) Review(_ context.Context, info user.Info, at
 	r.user = info
 	r.attrs = attrs
 	return r.err
+}
+
+// fakeTokenAuthenticator returns configured authentication results for filter tests.
+type fakeTokenAuthenticator struct {
+	// result is returned from Authenticate.
+	result *AuthenticationResult
+	// err is returned from Authenticate.
+	err error
+	// rawToken records the token passed to Authenticate.
+	rawToken string
+	// calls records Authenticate calls.
+	calls int
+}
+
+// Authenticate returns the configured fake authentication result.
+func (a *fakeTokenAuthenticator) Authenticate(_ context.Context, rawToken string) (*AuthenticationResult, error) {
+	a.calls++
+	a.rawToken = rawToken
+	return a.result, a.err
+}
+
+// fakeTokenAccessAuthenticator returns configured authentication and authorization results.
+type fakeTokenAccessAuthenticator struct {
+	// result is returned from AuthenticateAndAuthorize.
+	result *AuthenticationResult
+	// err is returned from AuthenticateAndAuthorize.
+	err error
+	// rawToken records the token passed to AuthenticateAndAuthorize.
+	rawToken string
+	// attrs records access attributes passed to AuthenticateAndAuthorize.
+	attrs *AccessAttributes
+	// reviewer records the reviewer passed to AuthenticateAndAuthorize.
+	reviewer SubjectAccessReviewer
+	// calls records AuthenticateAndAuthorize calls.
+	calls int
+}
+
+// Authenticate returns the configured fake authentication result.
+func (a *fakeTokenAccessAuthenticator) Authenticate(_ context.Context, rawToken string) (*AuthenticationResult, error) {
+	a.rawToken = rawToken
+	return a.result, a.err
+}
+
+// AuthenticateAndAuthorize returns the configured fake access result.
+func (a *fakeTokenAccessAuthenticator) AuthenticateAndAuthorize(_ context.Context, rawToken string, attrs *AccessAttributes, reviewer SubjectAccessReviewer) (*AuthenticationResult, error) {
+	a.calls++
+	a.rawToken = rawToken
+	a.attrs = attrs
+	a.reviewer = reviewer
+	return a.result, a.err
 }
 
 // testAuthProviderPersister records auth provider persistence calls in tests.
@@ -481,24 +533,10 @@ func TestAuthenticatorOIDCDiscoveryUsesRequestTimeout(t *testing.T) {
 		t.Fatalf("NewAuthenticator() error = %v", err)
 	}
 
-	resultCh := make(chan error, 1)
-	started := time.Now()
-	go func() {
+	assertServiceUnavailableWithin(t, func() error {
 		_, err := authenticator.Authenticate(context.Background(), "token")
-		resultCh <- err
-	}()
-
-	select {
-	case err := <-resultCh:
-		if !apierrors.IsServiceUnavailable(err) {
-			t.Fatalf("Authenticate() error = %v, want service unavailable", err)
-		}
-		if elapsed := time.Since(started); elapsed > time.Second {
-			t.Fatalf("Authenticate() elapsed = %v, want bounded by OIDC timeout", elapsed)
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("Authenticate() did not return within the OIDC timeout")
-	}
+		return err
+	})
 }
 
 // TestAuthenticatorOIDCJWKSUsesRequestTimeout verifies JWKS refresh cannot block forever.
@@ -549,24 +587,10 @@ func TestAuthenticatorOIDCJWKSUsesRequestTimeout(t *testing.T) {
 		t.Fatalf("NewAuthenticator() error = %v", err)
 	}
 
-	resultCh := make(chan error, 1)
-	started := time.Now()
-	go func() {
+	assertServiceUnavailableWithin(t, func() error {
 		_, err := authenticator.Authenticate(context.Background(), rawToken)
-		resultCh <- err
-	}()
-
-	select {
-	case err := <-resultCh:
-		if !apierrors.IsServiceUnavailable(err) {
-			t.Fatalf("Authenticate() error = %v, want service unavailable", err)
-		}
-		if elapsed := time.Since(started); elapsed > time.Second {
-			t.Fatalf("Authenticate() elapsed = %v, want bounded by OIDC timeout", elapsed)
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("Authenticate() did not return within the OIDC timeout")
-	}
+		return err
+	})
 }
 
 // TestAuthenticatorOIDCVerifierDoesNotCacheRequestContextValues verifies cached JWKS clients avoid request-scoped values.
@@ -851,6 +875,78 @@ func TestAuthenticateAndAuthorizeFallsBackAfterPlatformAuthenticationFailure(t *
 	}
 }
 
+// TestAuthenticatorRejectsInvalidInputs verifies shared token and access attribute validation.
+func TestAuthenticatorRejectsInvalidInputs(t *testing.T) {
+	authenticator, err := NewAuthenticator(Config{KubernetesFallback: KubernetesFallbackDisabled})
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	if _, err := authenticator.Authenticate(context.Background(), " "); !apierrors.IsUnauthorized(err) {
+		t.Fatalf("Authenticate() empty token error = %v, want unauthorized", err)
+	}
+	if _, err := authenticator.AuthenticateAndAuthorize(context.Background(), " ", validAccessAttributes(), nil); !apierrors.IsUnauthorized(err) {
+		t.Fatalf("AuthenticateAndAuthorize() empty token error = %v, want unauthorized", err)
+	}
+	if _, err := authenticator.AuthenticateAndAuthorize(context.Background(), "token", nil, nil); err == nil {
+		t.Fatalf("AuthenticateAndAuthorize() nil attrs error = nil")
+	}
+}
+
+// TestAuthenticationBackendHelpers verifies small authentication helper branches.
+func TestAuthenticationBackendHelpers(t *testing.T) {
+	token, err := normalizeBearerToken(" token ")
+	if err != nil {
+		t.Fatalf("normalizeBearerToken() error = %v", err)
+	}
+	if token != "token" {
+		t.Fatalf("normalized token = %q, want token", token)
+	}
+	if _, err := normalizeBearerToken(""); !apierrors.IsUnauthorized(err) {
+		t.Fatalf("normalizeBearerToken() empty error = %v, want unauthorized", err)
+	}
+	if err := validateAuthenticationResult(nil); !apierrors.IsUnauthorized(err) {
+		t.Fatalf("validateAuthenticationResult() nil result error = %v, want unauthorized", err)
+	}
+	if err := validateAuthenticationResult(&AuthenticationResult{}); !apierrors.IsUnauthorized(err) {
+		t.Fatalf("validateAuthenticationResult() nil user error = %v, want unauthorized", err)
+	}
+	if got := authenticationResultUserName(nil); got != "" {
+		t.Fatalf("nil result username = %q, want empty", got)
+	}
+	if got := authenticationResultUserName(authenticationResultForUser("dev")); got != "dev" {
+		t.Fatalf("username = %q, want dev", got)
+	}
+}
+
+// TestAuthenticationFailureErrorBranches verifies aggregate backend error messages.
+func TestAuthenticationFailureErrorBranches(t *testing.T) {
+	if err := authenticationFailureError(nil); !apierrors.IsUnauthorized(err) {
+		t.Fatalf("authenticationFailureError() empty error = %v, want unauthorized", err)
+	}
+
+	singleErr := fmt.Errorf("single backend failed")
+	if err := authenticationFailureError([]backendFailure{{source: AuthenticationSourceOIDC, err: singleErr}}); err != singleErr {
+		t.Fatalf("single backend error = %v, want original error", err)
+	}
+
+	emptyAggregate := authenticationFailureError([]backendFailure{
+		{source: AuthenticationSourceOIDC},
+		{source: AuthenticationSourceKubernetes},
+	})
+	if !apierrors.IsUnauthorized(emptyAggregate) || !strings.Contains(emptyAggregate.Error(), "all request authentication backends failed") {
+		t.Fatalf("empty aggregate error = %v, want unauthorized aggregate", emptyAggregate)
+	}
+
+	combined := authenticationFailureError([]backendFailure{
+		{source: AuthenticationSourceOIDC, err: fmt.Errorf("oidc rejected token")},
+		{source: AuthenticationSourceKubernetes, err: fmt.Errorf("token review rejected token")},
+	})
+	if !apierrors.IsUnauthorized(combined) || !strings.Contains(combined.Error(), "oidc rejected token") || !strings.Contains(combined.Error(), "token review rejected token") {
+		t.Fatalf("combined error = %v, want both backend failures", combined)
+	}
+}
+
 // TestPlatformReviewerRestConfigForTokenDropsCopiedCredentials verifies token configs do not inherit base identities.
 func TestPlatformReviewerRestConfigForTokenDropsCopiedCredentials(t *testing.T) {
 	proxyURL, err := url.Parse("http://proxy.example.com")
@@ -1099,6 +1195,65 @@ func TestAuthenticationFilterInjectsUser(t *testing.T) {
 	}
 }
 
+// TestAuthenticationFilterErrors verifies authentication-only filter error paths.
+func TestAuthenticationFilterErrors(t *testing.T) {
+	tests := []struct {
+		// name identifies the test case.
+		name string
+		// authenticator stores the fake authenticator used by the filter.
+		authenticator TokenAuthenticator
+		// authorization stores the request Authorization header value.
+		authorization string
+		// wantStatus is the expected HTTP response status.
+		wantStatus int
+	}{
+		{
+			name:          "nil authenticator",
+			authorization: "Bearer token",
+			wantStatus:    http.StatusInternalServerError,
+		},
+		{
+			name:          "missing bearer token",
+			authenticator: authenticationResultAuthenticator("dev"),
+			wantStatus:    http.StatusUnauthorized,
+		},
+		{
+			name: "authenticator error",
+			authenticator: &fakeTokenAuthenticator{
+				err: apierrors.NewUnauthorized("token rejected"),
+			},
+			authorization: "Bearer token",
+			wantStatus:    http.StatusUnauthorized,
+		},
+		{
+			name: "nil authentication result user",
+			authenticator: &fakeTokenAuthenticator{
+				result: &AuthenticationResult{},
+			},
+			authorization: "Bearer token",
+			wantStatus:    http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, resp, recorder := newFilterRequest(tt.authorization)
+			called := false
+			NewAuthenticationFilter(tt.authenticator)(req, resp, &restful.FilterChain{
+				Target: func(_ *restful.Request, _ *restful.Response) {
+					called = true
+				},
+			})
+			if called {
+				t.Fatalf("filter chain was called")
+			}
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("response code = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
 // TestSubjectAccessReviewFilter verifies authn plus SAR filter behavior.
 func TestSubjectAccessReviewFilter(t *testing.T) {
 	authenticator, err := NewAuthenticator(Config{}, WithTokenReviewer(&fakeTokenReviewer{
@@ -1137,6 +1292,139 @@ func TestSubjectAccessReviewFilter(t *testing.T) {
 	}
 	if reviewer.attrs == nil || reviewer.attrs.NonResourceAttributes == nil {
 		t.Fatalf("reviewer attrs were not recorded")
+	}
+}
+
+// TestSubjectAccessReviewFilterAccessAuthenticatorErrors verifies direct access authenticator error paths.
+func TestSubjectAccessReviewFilterAccessAuthenticatorErrors(t *testing.T) {
+	tests := []struct {
+		// name identifies the test case.
+		name string
+		// authenticator stores the access authenticator used by the filter.
+		authenticator *fakeTokenAccessAuthenticator
+		// getter stores the attributes getter used by the filter.
+		getter AccessAttributesGetter
+		// authorization stores the request Authorization header value.
+		authorization string
+		// wantStatus is the expected HTTP response status.
+		wantStatus int
+	}{
+		{
+			name:          "missing bearer token",
+			authenticator: accessResultAuthenticator("dev"),
+			getter:        staticAccessAttributesGetter(),
+			wantStatus:    http.StatusUnauthorized,
+		},
+		{
+			name:          "nil getter",
+			authenticator: accessResultAuthenticator("dev"),
+			authorization: "Bearer token",
+			wantStatus:    http.StatusInternalServerError,
+		},
+		{
+			name:          "getter error",
+			authenticator: accessResultAuthenticator("dev"),
+			getter: AccessAttributesGetterFunc(func(_ context.Context, _ *restful.Request) (*AccessAttributes, error) {
+				return nil, fmt.Errorf("attributes unavailable")
+			}),
+			authorization: "Bearer token",
+			wantStatus:    http.StatusInternalServerError,
+		},
+		{
+			name: "access authenticator error",
+			authenticator: &fakeTokenAccessAuthenticator{
+				err: apierrors.NewUnauthorized("token rejected"),
+			},
+			getter:        staticAccessAttributesGetter(),
+			authorization: "Bearer token",
+			wantStatus:    http.StatusUnauthorized,
+		},
+		{
+			name: "nil authentication result user",
+			authenticator: &fakeTokenAccessAuthenticator{
+				result: &AuthenticationResult{},
+			},
+			getter:        staticAccessAttributesGetter(),
+			authorization: "Bearer token",
+			wantStatus:    http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, resp, recorder := newFilterRequest(tt.authorization)
+			called := false
+			NewSubjectAccessReviewFilter(tt.authenticator, &fakeSubjectAccessReviewer{}, tt.getter)(req, resp, &restful.FilterChain{
+				Target: func(_ *restful.Request, _ *restful.Response) {
+					called = true
+				},
+			})
+			if called {
+				t.Fatalf("filter chain was called")
+			}
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("response code = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestSubjectAccessReviewFilterLegacyErrors verifies two-step authn plus SAR error paths.
+func TestSubjectAccessReviewFilterLegacyErrors(t *testing.T) {
+	tests := []struct {
+		// name identifies the test case.
+		name string
+		// reviewer stores the reviewer used by the filter.
+		reviewer SubjectAccessReviewer
+		// getter stores the attributes getter used by the filter.
+		getter AccessAttributesGetter
+		// wantStatus is the expected HTTP response status.
+		wantStatus int
+	}{
+		{
+			name:       "nil reviewer",
+			getter:     staticAccessAttributesGetter(),
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "nil getter",
+			reviewer:   &fakeSubjectAccessReviewer{},
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:     "getter error",
+			reviewer: &fakeSubjectAccessReviewer{},
+			getter: AccessAttributesGetterFunc(func(_ context.Context, _ *restful.Request) (*AccessAttributes, error) {
+				return nil, fmt.Errorf("attributes unavailable")
+			}),
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name: "reviewer error",
+			reviewer: &fakeSubjectAccessReviewer{
+				err: apierrors.NewForbidden(schema.GroupResource{Resource: "deployments"}, "web", fmt.Errorf("denied")),
+			},
+			getter:     staticAccessAttributesGetter(),
+			wantStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, resp, recorder := newFilterRequest("Bearer token")
+			called := false
+			NewSubjectAccessReviewFilter(authenticationResultAuthenticator("dev"), tt.reviewer, tt.getter)(req, resp, &restful.FilterChain{
+				Target: func(_ *restful.Request, _ *restful.Response) {
+					called = true
+				},
+			})
+			if called {
+				t.Fatalf("filter chain was called")
+			}
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("response code = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+		})
 	}
 }
 
@@ -1306,6 +1594,77 @@ func TestSubjectAccessReviewFilterRunsAfterPlatformAccessAllowed(t *testing.T) {
 	}
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("response code = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+// authenticationResultForUser returns a test authentication result for one username.
+func authenticationResultForUser(name string) *AuthenticationResult {
+	return &AuthenticationResult{
+		User: &user.DefaultInfo{Name: name},
+	}
+}
+
+// authenticationResultAuthenticator returns a fake authenticator for one username.
+func authenticationResultAuthenticator(name string) *fakeTokenAuthenticator {
+	return &fakeTokenAuthenticator{
+		result: authenticationResultForUser(name),
+	}
+}
+
+// accessResultAuthenticator returns a fake access authenticator for one username.
+func accessResultAuthenticator(name string) *fakeTokenAccessAuthenticator {
+	return &fakeTokenAccessAuthenticator{
+		result: authenticationResultForUser(name),
+	}
+}
+
+// validAccessAttributes returns a reusable non-resource access request.
+func validAccessAttributes() *AccessAttributes {
+	return &AccessAttributes{
+		NonResourceAttributes: &authorizationPathAttributes,
+	}
+}
+
+// staticAccessAttributesGetter returns a getter for a reusable access request.
+func staticAccessAttributesGetter() AccessAttributesGetter {
+	return AccessAttributesGetterFunc(func(_ context.Context, _ *restful.Request) (*AccessAttributes, error) {
+		return validAccessAttributes(), nil
+	})
+}
+
+// newFilterRequest creates a go-restful request and response for filter tests.
+func newFilterRequest(authorization string) (*restful.Request, *restful.Response, *httptest.ResponseRecorder) {
+	req := restful.NewRequest(httptest.NewRequest(http.MethodGet, "/", nil))
+	req.Request.Header.Set("Accept", restful.MIME_JSON)
+	if authorization != "" {
+		req.Request.Header.Set(AuthorizationHeader, authorization)
+	}
+	recorder := httptest.NewRecorder()
+	resp := restful.NewResponse(recorder)
+	resp.SetRequestAccepts(restful.MIME_JSON)
+	return req, resp, recorder
+}
+
+// assertServiceUnavailableWithin verifies an OIDC upstream timeout returns promptly.
+func assertServiceUnavailableWithin(t *testing.T, run func() error) {
+	t.Helper()
+
+	resultCh := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		resultCh <- run()
+	}()
+
+	select {
+	case err := <-resultCh:
+		if !apierrors.IsServiceUnavailable(err) {
+			t.Fatalf("Authenticate() error = %v, want service unavailable", err)
+		}
+		if elapsed := time.Since(started); elapsed > time.Second {
+			t.Fatalf("Authenticate() elapsed = %v, want bounded by OIDC timeout", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("Authenticate() did not return within the OIDC timeout")
 	}
 }
 

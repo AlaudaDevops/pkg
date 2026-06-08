@@ -81,14 +81,20 @@ func NewAuthenticationFilter(authenticator TokenAuthenticator) restful.FilterFun
 			kerrors.HandleError(req, resp, err)
 			return
 		}
-		if result == nil || result.User == nil {
-			kerrors.HandleError(req, resp, apierrors.NewUnauthorized("request authentication did not return a user"))
-			return
-		}
 
-		reqCtx := apiserverrequest.WithUser(req.Request.Context(), result.User)
-		reqCtx = WithAuthenticationResult(reqCtx, result)
-		req.Request = req.Request.WithContext(reqCtx)
-		chain.ProcessFilter(req, resp)
+		processAuthenticatedRequest(req, resp, chain, result)
 	}
+}
+
+// processAuthenticatedRequest stores authentication data and continues the filter chain.
+func processAuthenticatedRequest(req *restful.Request, resp *restful.Response, chain *restful.FilterChain, result *AuthenticationResult) {
+	if result == nil || result.User == nil {
+		kerrors.HandleError(req, resp, apierrors.NewUnauthorized("request authentication did not return a user"))
+		return
+	}
+
+	reqCtx := apiserverrequest.WithUser(req.Request.Context(), result.User)
+	reqCtx = WithAuthenticationResult(reqCtx, result)
+	req.Request = req.Request.WithContext(reqCtx)
+	chain.ProcessFilter(req, resp)
 }
