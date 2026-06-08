@@ -212,7 +212,7 @@ func (a *Authenticator) oidcVerifier(ctx context.Context) (*oidc.IDTokenVerifier
 	if err != nil {
 		return nil, err
 	}
-	a.verifier = provider.VerifierContext(oidcCtx, &oidc.Config{
+	a.verifier = provider.Verifier(&oidc.Config{
 		// Signature, issuer, JWKS, and signing algorithm checks still run in go-oidc.
 		// Audience and time claims are skipped here because ValidateVerifiedClaims
 		// applies the package-level multi-audience and configurable clock-skew rules.

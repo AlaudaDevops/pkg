@@ -26,21 +26,24 @@ import (
 const (
 	// AuthorizationHeader is the HTTP header used for bearer tokens.
 	AuthorizationHeader = "Authorization"
+	// bearerScheme is the case-insensitive HTTP authentication scheme for bearer tokens.
+	bearerScheme = "Bearer"
 	// BearerPrefix is the expected Authorization header prefix.
-	BearerPrefix = "Bearer "
+	BearerPrefix = bearerScheme + " "
 )
 
 // BearerTokenFromRequest extracts a bearer token from the Authorization header.
 func BearerTokenFromRequest(req *restful.Request) (string, error) {
-	authHeader := req.HeaderParameter(AuthorizationHeader)
+	authHeader := strings.TrimSpace(req.HeaderParameter(AuthorizationHeader))
 	if authHeader == "" {
 		return "", apierrors.NewUnauthorized("a Bearer token must be provided")
 	}
-	if !strings.HasPrefix(authHeader, BearerPrefix) {
+	scheme, token, ok := strings.Cut(authHeader, " ")
+	if !ok || !strings.EqualFold(scheme, bearerScheme) {
 		return "", apierrors.NewUnauthorized("Authorization header must use Bearer authentication")
 	}
 
-	token := strings.TrimSpace(strings.TrimPrefix(authHeader, BearerPrefix))
+	token = strings.TrimSpace(token)
 	if token == "" {
 		return "", apierrors.NewUnauthorized("a Bearer token must be provided")
 	}

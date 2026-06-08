@@ -73,20 +73,104 @@ func (r *fakeSubjectAccessReviewer) Review(_ context.Context, info user.Info, at
 	return r.err
 }
 
+// oidcRequestContextKey marks request-scoped context values in OIDC verifier tests.
+type oidcRequestContextKey struct{}
+
+// contextRecordingRoundTripper records request context values for selected OIDC requests.
+type contextRecordingRoundTripper struct {
+	// base sends HTTP requests after recording context values.
+	base http.RoundTripper
+	// mu protects jwksValues.
+	mu sync.Mutex
+	// jwksValues records marker values seen on JWKS HTTP request contexts.
+	jwksValues []any
+}
+
+// RoundTrip records JWKS request context values before delegating to the base transport.
+func (r *contextRecordingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Path == "/keys" {
+		r.mu.Lock()
+		r.jwksValues = append(r.jwksValues, req.Context().Value(oidcRequestContextKey{}))
+		r.mu.Unlock()
+	}
+	base := r.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(req)
+}
+
+// JWKSValues returns recorded marker values from JWKS request contexts.
+func (r *contextRecordingRoundTripper) JWKSValues() []any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]any{}, r.jwksValues...)
+}
+
 // TestBearerTokenFromRequest verifies Authorization header parsing.
 func TestBearerTokenFromRequest(t *testing.T) {
-	req := restful.NewRequest(httptest.NewRequest(http.MethodGet, "/", nil))
-	if _, err := BearerTokenFromRequest(req); !apierrors.IsUnauthorized(err) {
-		t.Fatalf("BearerTokenFromRequest() error = %v, want unauthorized", err)
+	tests := []struct {
+		// name identifies the test case.
+		name string
+		// authorization stores the request Authorization header value.
+		authorization string
+		// wantToken is the bearer token expected from the request.
+		wantToken string
+		// wantUnauthorized records whether parsing should reject the request.
+		wantUnauthorized bool
+	}{
+		{
+			name:             "missing header",
+			wantUnauthorized: true,
+		},
+		{
+			name:          "canonical bearer scheme",
+			authorization: "Bearer token-1",
+			wantToken:     "token-1",
+		},
+		{
+			name:          "lowercase bearer scheme",
+			authorization: "bearer token-1",
+			wantToken:     "token-1",
+		},
+		{
+			name:          "mixed case bearer scheme",
+			authorization: "bEaReR token-1",
+			wantToken:     "token-1",
+		},
+		{
+			name:             "non bearer scheme",
+			authorization:    "Basic token-1",
+			wantUnauthorized: true,
+		},
+		{
+			name:             "empty token",
+			authorization:    "Bearer ",
+			wantUnauthorized: true,
+		},
 	}
 
-	req.Request.Header.Set(AuthorizationHeader, "Bearer token-1")
-	token, err := BearerTokenFromRequest(req)
-	if err != nil {
-		t.Fatalf("BearerTokenFromRequest() error = %v", err)
-	}
-	if token != "token-1" {
-		t.Fatalf("token = %q, want token-1", token)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := restful.NewRequest(httptest.NewRequest(http.MethodGet, "/", nil))
+			if tt.authorization != "" {
+				req.Request.Header.Set(AuthorizationHeader, tt.authorization)
+			}
+
+			token, err := BearerTokenFromRequest(req)
+			if tt.wantUnauthorized {
+				if !apierrors.IsUnauthorized(err) {
+					t.Fatalf("BearerTokenFromRequest() error = %v, want unauthorized", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BearerTokenFromRequest() error = %v", err)
+			}
+			if token != tt.wantToken {
+				t.Fatalf("token = %q, want %s", token, tt.wantToken)
+			}
+		})
 	}
 }
 
@@ -272,6 +356,54 @@ func TestAuthenticatorOIDC(t *testing.T) {
 	}
 	if result.User.GetName() != "dev" {
 		t.Fatalf("user = %q, want dev", result.User.GetName())
+	}
+}
+
+// TestAuthenticatorOIDCVerifierDoesNotCacheRequestContextValues verifies cached JWKS clients avoid request-scoped values.
+func TestAuthenticatorOIDCVerifierDoesNotCacheRequestContextValues(t *testing.T) {
+	now := time.Unix(2000, 0)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+
+	server := newOIDCTestServer(t, key)
+	defer server.Close()
+
+	client := server.Client()
+	recorder := &contextRecordingRoundTripper{base: client.Transport}
+	client.Transport = recorder
+
+	rawToken := signedOIDCToken(t, key, jwt.MapClaims{
+		"iss":                server.URL,
+		"sub":                "sub-1",
+		"aud":                "client",
+		"preferred_username": "dev",
+		"exp":                now.Add(time.Hour).Unix(),
+		"iat":                now.Unix(),
+	})
+	authenticator, err := NewAuthenticator(Config{
+		IssuerURL: server.URL,
+		Audiences: []string{"client"},
+		Now:       func() time.Time { return now },
+	}, WithHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), oidcRequestContextKey{}, "request-marker")
+	if _, err := authenticator.Authenticate(ctx, rawToken); err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+
+	values := recorder.JWKSValues()
+	if len(values) == 0 {
+		t.Fatalf("JWKS request was not recorded")
+	}
+	for _, value := range values {
+		if value != nil {
+			t.Fatalf("JWKS request context marker = %v, want nil", value)
+		}
 	}
 }
 
