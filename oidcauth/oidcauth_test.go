@@ -129,7 +129,93 @@ func TestClaimsMappingAndValidation(t *testing.T) {
 	if info.GetName() != "oidc:dev" {
 		t.Fatalf("name = %q, want oidc:dev", info.GetName())
 	}
-	wantGroups := []string{"oidc:role-a", "oidc:role-b", "oidc:team-a", "oidc:team-b"}
+	wantGroups := []string{"oidc:role-a", "oidc:role-b", "oidc:team-a", "oidc:team-b", "system:authenticated"}
+	if got := fmt.Sprintf("%v", info.GetGroups()); got != fmt.Sprintf("%v", wantGroups) {
+		t.Fatalf("groups = %v, want %v", info.GetGroups(), wantGroups)
+	}
+}
+
+// TestKubernetesIdentityFromClaimsRejectsReservedUsername verifies reserved usernames are not trusted from OIDC claims.
+func TestKubernetesIdentityFromClaimsRejectsReservedUsername(t *testing.T) {
+	token := &VerifiedToken{
+		Claims: map[string]any{
+			"preferred_username": "system:serviceaccount:ns:default",
+		},
+	}
+
+	_, err := KubernetesIdentityFromClaims(Config{
+		UsernameClaims: []string{"preferred_username"},
+	}, token)
+	if !apierrors.IsUnauthorized(err) {
+		t.Fatalf("KubernetesIdentityFromClaims() error = %v, want unauthorized", err)
+	}
+}
+
+// TestKubernetesIdentityFromClaimsRejectsReservedClaimGroups verifies reserved groups are not trusted from OIDC claims.
+func TestKubernetesIdentityFromClaimsRejectsReservedClaimGroups(t *testing.T) {
+	tests := []struct {
+		// name identifies the test case.
+		name string
+		// config stores the OIDC claim mapping config.
+		config Config
+		// claims stores the verified OIDC claims.
+		claims map[string]any
+	}{
+		{
+			name: "groups claim contains system masters",
+			config: Config{
+				UsernameClaims: []string{"preferred_username"},
+				GroupsClaims:   []string{"groups"},
+			},
+			claims: map[string]any{
+				"preferred_username": "dev",
+				"groups":             []any{"team-a", "system:masters"},
+			},
+		},
+		{
+			name: "roles claim contains authenticated group",
+			config: Config{
+				UsernameClaims: []string{"preferred_username"},
+				RolesClaims:    []string{"roles"},
+			},
+			claims: map[string]any{
+				"preferred_username": "dev",
+				"roles":              "role-a,system:authenticated",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := &VerifiedToken{Claims: tt.claims}
+
+			_, err := KubernetesIdentityFromClaims(tt.config, token)
+			if !apierrors.IsUnauthorized(err) {
+				t.Fatalf("KubernetesIdentityFromClaims() error = %v, want unauthorized", err)
+			}
+		})
+	}
+}
+
+// TestKubernetesIdentityFromClaimsAllowsPrefixedReservedClaimValues verifies safe prefixes avoid reserved identities.
+func TestKubernetesIdentityFromClaimsAllowsPrefixedReservedClaimValues(t *testing.T) {
+	token := &VerifiedToken{
+		Claims: map[string]any{
+			"preferred_username": "dev",
+			"groups":             []any{"system:masters"},
+		},
+	}
+
+	info, err := KubernetesIdentityFromClaims(Config{
+		UsernameClaims: []string{"preferred_username"},
+		GroupsClaims:   []string{"groups"},
+		GroupPrefix:    "oidc:",
+	}, token)
+	if err != nil {
+		t.Fatalf("KubernetesIdentityFromClaims() error = %v", err)
+	}
+
+	wantGroups := []string{"oidc:system:masters", "system:authenticated"}
 	if got := fmt.Sprintf("%v", info.GetGroups()); got != fmt.Sprintf("%v", wantGroups) {
 		t.Fatalf("groups = %v, want %v", info.GetGroups(), wantGroups)
 	}

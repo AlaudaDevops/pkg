@@ -50,10 +50,19 @@ func KubernetesIdentityFromClaims(config Config, token *VerifiedToken) (user.Inf
 	if err != nil {
 		return nil, err
 	}
+	name = config.UserPrefix + name
+	if isKubernetesReservedIdentity(name) {
+		return nil, apierrors.NewUnauthorized("OIDC username uses reserved Kubernetes system: prefix")
+	}
+
+	groups, err := groupsFromClaims(config, token.Claims)
+	if err != nil {
+		return nil, err
+	}
 
 	return &user.DefaultInfo{
-		Name:   config.UserPrefix + name,
-		Groups: groupsFromClaims(config, token.Claims),
+		Name:   name,
+		Groups: groups,
 	}, nil
 }
 
@@ -89,31 +98,52 @@ func usernameFromClaims(config Config, claims map[string]any) (string, error) {
 }
 
 // groupsFromClaims maps configured group and role claims to Kubernetes groups.
-func groupsFromClaims(config Config, claims map[string]any) []string {
+func groupsFromClaims(config Config, claims map[string]any) ([]string, error) {
 	seen := map[string]struct{}{}
 	groups := []string{}
-	for _, claim := range append([]string{}, config.GroupsClaims...) {
-		for _, value := range stringSliceClaim(claims, claim) {
-			group := config.GroupPrefix + value
-			if _, ok := seen[group]; ok {
-				continue
-			}
-			seen[group] = struct{}{}
-			groups = append(groups, group)
+	for _, claim := range config.GroupsClaims {
+		var err error
+		groups, err = addClaimGroups(groups, seen, config.GroupPrefix, claims, claim)
+		if err != nil {
+			return nil, err
 		}
 	}
 	for _, claim := range config.RolesClaims {
-		for _, value := range stringSliceClaim(claims, claim) {
-			group := config.GroupPrefix + value
-			if _, ok := seen[group]; ok {
-				continue
-			}
-			seen[group] = struct{}{}
-			groups = append(groups, group)
+		var err error
+		groups, err = addClaimGroups(groups, seen, config.GroupPrefix, claims, claim)
+		if err != nil {
+			return nil, err
 		}
 	}
+	groups = appendUniqueGroup(groups, seen, user.AllAuthenticated)
 	sort.Strings(groups)
-	return groups
+	return groups, nil
+}
+
+// addClaimGroups maps one claim to Kubernetes groups and rejects reserved identities.
+func addClaimGroups(groups []string, seen map[string]struct{}, prefix string, claims map[string]any, claim string) ([]string, error) {
+	for _, value := range stringSliceClaim(claims, claim) {
+		group := prefix + value
+		if isKubernetesReservedIdentity(group) {
+			return nil, apierrors.NewUnauthorized("OIDC group uses reserved Kubernetes system: prefix")
+		}
+		groups = appendUniqueGroup(groups, seen, group)
+	}
+	return groups, nil
+}
+
+// appendUniqueGroup appends a group once while preserving the caller's slice.
+func appendUniqueGroup(groups []string, seen map[string]struct{}, group string) []string {
+	if _, ok := seen[group]; ok {
+		return groups
+	}
+	seen[group] = struct{}{}
+	return append(groups, group)
+}
+
+// isKubernetesReservedIdentity returns true for Kubernetes reserved system identities.
+func isKubernetesReservedIdentity(value string) bool {
+	return strings.HasPrefix(value, "system:")
 }
 
 // validateAudiences returns nil when any token audience is accepted.
