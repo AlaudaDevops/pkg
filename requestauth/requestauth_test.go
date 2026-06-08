@@ -26,6 +26,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	apiserverrequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/rest"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 // fakeTokenReviewer returns a configured TokenReview status for tests.
@@ -48,10 +50,13 @@ type fakeTokenReviewer struct {
 	err error
 	// audiences records the audiences passed to ReviewToken.
 	audiences []string
+	// calls records ReviewToken calls.
+	calls int
 }
 
 // ReviewToken returns the configured fake TokenReview result.
 func (r *fakeTokenReviewer) ReviewToken(_ context.Context, _ string, audiences []string) (*authnv1.TokenReviewStatus, error) {
+	r.calls++
 	r.audiences = append([]string{}, audiences...)
 	return r.status, r.err
 }
@@ -105,6 +110,14 @@ func (r *fakeSubjectAccessReviewer) Review(_ context.Context, info user.Info, at
 	r.user = info
 	r.attrs = attrs
 	return r.err
+}
+
+// testAuthProviderPersister records auth provider persistence calls in tests.
+type testAuthProviderPersister struct{}
+
+// Persist satisfies rest.AuthProviderConfigPersister for credential-copy tests.
+func (testAuthProviderPersister) Persist(_ map[string]string) error {
+	return nil
 }
 
 // oidcRequestContextKey marks request-scoped context values in OIDC verifier tests.
@@ -746,6 +759,211 @@ func TestAuthenticatorFallsBackAfterPlatformFailure(t *testing.T) {
 	}
 }
 
+// TestAuthenticateAndAuthorizeStopsAfterPlatformAccessDenied verifies platform authorization denial is final.
+func TestAuthenticateAndAuthorizeStopsAfterPlatformAccessDenied(t *testing.T) {
+	platform := &fakePlatformReviewer{
+		selfStatus: &authnv1.SelfSubjectReviewStatus{
+			UserInfo: authnv1.UserInfo{
+				Username: "platform-user",
+			},
+		},
+		accessStatus: &authv1.SubjectAccessReviewStatus{
+			Allowed: false,
+			Reason:  "denied by platform",
+		},
+	}
+	tokenReviewer := &fakeTokenReviewer{
+		status: &authnv1.TokenReviewStatus{
+			Authenticated: true,
+			User: authnv1.UserInfo{
+				Username: "kubernetes-user",
+			},
+		},
+	}
+	authenticator, err := NewAuthenticator(Config{
+		PlatformURL: "https://platform.example.com",
+		ClusterName: "business",
+	}, WithPlatformReviewer(platform), WithTokenReviewer(tokenReviewer))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	currentClusterReviewer := &fakeSubjectAccessReviewer{}
+	result, err := authenticator.AuthenticateAndAuthorize(context.Background(), "token", &AccessAttributes{
+		NonResourceAttributes: &authorizationPathAttributes,
+	}, currentClusterReviewer)
+	if !apierrors.IsForbidden(err) {
+		t.Fatalf("AuthenticateAndAuthorize() error = %v, want forbidden", err)
+	}
+	if result != nil {
+		t.Fatalf("AuthenticateAndAuthorize() result = %v, want nil", result)
+	}
+	if platform.selfCalls != 1 || platform.accessCalls != 1 {
+		t.Fatalf("platform calls = self:%d access:%d, want 1/1", platform.selfCalls, platform.accessCalls)
+	}
+	if tokenReviewer.calls != 0 {
+		t.Fatalf("token reviewer calls = %d, want 0", tokenReviewer.calls)
+	}
+	if currentClusterReviewer.calls != 0 {
+		t.Fatalf("current-cluster reviewer calls = %d, want 0", currentClusterReviewer.calls)
+	}
+}
+
+// TestAuthenticateAndAuthorizeFallsBackAfterPlatformAuthenticationFailure verifies authn failures still fall back.
+func TestAuthenticateAndAuthorizeFallsBackAfterPlatformAuthenticationFailure(t *testing.T) {
+	platform := &fakePlatformReviewer{
+		selfErr: apierrors.NewUnauthorized("platform rejected token"),
+	}
+	tokenReviewer := &fakeTokenReviewer{
+		status: &authnv1.TokenReviewStatus{
+			Authenticated: true,
+			User: authnv1.UserInfo{
+				Username: "kubernetes-user",
+			},
+		},
+	}
+	authenticator, err := NewAuthenticator(Config{
+		PlatformURL: "https://platform.example.com",
+		ClusterName: "business",
+	}, WithPlatformReviewer(platform), WithTokenReviewer(tokenReviewer))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	currentClusterReviewer := &fakeSubjectAccessReviewer{}
+	result, err := authenticator.AuthenticateAndAuthorize(context.Background(), "token", &AccessAttributes{
+		NonResourceAttributes: &authorizationPathAttributes,
+	}, currentClusterReviewer)
+	if err != nil {
+		t.Fatalf("AuthenticateAndAuthorize() error = %v", err)
+	}
+	if result.Source != AuthenticationSourceKubernetes {
+		t.Fatalf("source = %s, want %s", result.Source, AuthenticationSourceKubernetes)
+	}
+	if platform.selfCalls != 1 || platform.accessCalls != 0 {
+		t.Fatalf("platform calls = self:%d access:%d, want 1/0", platform.selfCalls, platform.accessCalls)
+	}
+	if tokenReviewer.calls != 1 {
+		t.Fatalf("token reviewer calls = %d, want 1", tokenReviewer.calls)
+	}
+	if currentClusterReviewer.calls != 1 {
+		t.Fatalf("current-cluster reviewer calls = %d, want 1", currentClusterReviewer.calls)
+	}
+}
+
+// TestPlatformReviewerRestConfigForTokenDropsCopiedCredentials verifies token configs do not inherit base identities.
+func TestPlatformReviewerRestConfigForTokenDropsCopiedCredentials(t *testing.T) {
+	proxyURL, err := url.Parse("http://proxy.example.com")
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+	baseConfig := &rest.Config{
+		Host: "https://cluster.example.com",
+		ContentConfig: rest.ContentConfig{
+			AcceptContentTypes: "application/json",
+			ContentType:        "application/json",
+		},
+		Username:        "base-user",
+		Password:        "base-password",
+		BearerToken:     "base-token",
+		BearerTokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+		Impersonate: rest.ImpersonationConfig{
+			UserName: "impersonated-user",
+			UID:      "impersonated-uid",
+			Groups:   []string{"impersonated-group"},
+			Extra:    map[string][]string{"scope": {"impersonated-scope"}},
+		},
+		AuthProvider: &clientcmdapi.AuthProviderConfig{
+			Name:   "oidc",
+			Config: map[string]string{"id-token": "base-id-token"},
+		},
+		AuthConfigPersister: testAuthProviderPersister{},
+		ExecProvider: &clientcmdapi.ExecConfig{
+			Command: "credential-plugin",
+		},
+		TLSClientConfig: rest.TLSClientConfig{
+			Insecure:   true,
+			ServerName: "platform.internal",
+			CertFile:   "/path/to/client.crt",
+			KeyFile:    "/path/to/client.key",
+			CAFile:     "/path/to/ca.crt",
+			CertData:   []byte("client-cert-data"),
+			KeyData:    []byte("client-key-data"),
+			CAData:     []byte("ca-data"),
+			NextProtos: []string{"h2"},
+		},
+		UserAgent:          "requestauth-test",
+		DisableCompression: true,
+		Transport:          http.DefaultTransport,
+		WrapTransport: func(rt http.RoundTripper) http.RoundTripper {
+			return rt
+		},
+		QPS:     20,
+		Burst:   30,
+		Timeout: 5 * time.Second,
+		Proxy: func(_ *http.Request) (*url.URL, error) {
+			return proxyURL, nil
+		},
+	}
+	reviewer := &PlatformKubernetesReviewer{
+		BaseConfig:            baseConfig,
+		PlatformURL:           "https://platform.example.com",
+		ClusterName:           "business",
+		InsecureSkipTLSVerify: false,
+	}
+
+	config, err := reviewer.restConfigForToken("  request-token  ")
+	if err != nil {
+		t.Fatalf("restConfigForToken() error = %v", err)
+	}
+	if config.Host != "https://platform.example.com/kubernetes/business" {
+		t.Fatalf("host = %q, want platform route", config.Host)
+	}
+	if config.BearerToken != "request-token" {
+		t.Fatalf("bearer token = %q, want request token", config.BearerToken)
+	}
+	if config.Username != "" || config.Password != "" || config.BearerTokenFile != "" {
+		t.Fatalf("basic or bearer file credentials were copied")
+	}
+	if config.AuthProvider != nil || config.AuthConfigPersister != nil || config.ExecProvider != nil {
+		t.Fatalf("plugin credentials were copied")
+	}
+	if config.Impersonate.UserName != "" || config.Impersonate.UID != "" || len(config.Impersonate.Groups) != 0 || len(config.Impersonate.Extra) != 0 {
+		t.Fatalf("impersonation config was copied: %#v", config.Impersonate)
+	}
+	if config.TLSClientConfig.CertFile != "" || config.TLSClientConfig.KeyFile != "" || len(config.TLSClientConfig.CertData) != 0 || len(config.TLSClientConfig.KeyData) != 0 {
+		t.Fatalf("client certificate credentials were copied")
+	}
+	if config.TLSClientConfig.Insecure {
+		t.Fatalf("insecure TLS was inherited from base config")
+	}
+	if config.TLSClientConfig.ServerName != "platform.internal" || config.TLSClientConfig.CAFile != "/path/to/ca.crt" || string(config.TLSClientConfig.CAData) != "ca-data" {
+		t.Fatalf("CA or server name transport settings were not preserved: %#v", config.TLSClientConfig)
+	}
+	if len(config.TLSClientConfig.NextProtos) != 1 || config.TLSClientConfig.NextProtos[0] != "h2" {
+		t.Fatalf("next protos = %v, want [h2]", config.TLSClientConfig.NextProtos)
+	}
+	if config.ContentConfig.ContentType != "application/json" || config.UserAgent != "requestauth-test" || !config.DisableCompression {
+		t.Fatalf("non-identity request settings were not preserved")
+	}
+	if config.QPS != 20 || config.Burst != 30 || config.Timeout != 5*time.Second {
+		t.Fatalf("rate or timeout settings were not preserved")
+	}
+	if config.Transport != nil || config.WrapTransport != nil {
+		t.Fatalf("custom transport wrappers were copied")
+	}
+	if config.Proxy == nil {
+		t.Fatalf("proxy setting was not preserved")
+	}
+	gotProxyURL, err := config.Proxy(httptest.NewRequest(http.MethodGet, "https://platform.example.com", nil))
+	if err != nil {
+		t.Fatalf("Proxy() error = %v", err)
+	}
+	if gotProxyURL.String() != proxyURL.String() {
+		t.Fatalf("proxy URL = %q, want %q", gotProxyURL.String(), proxyURL.String())
+	}
+}
+
 // TestAuthenticatorKubernetesFallback verifies TokenReview fallback when issuer is not configured.
 func TestAuthenticatorKubernetesFallback(t *testing.T) {
 	reviewer := &fakeTokenReviewer{
@@ -974,6 +1192,120 @@ func TestSubjectAccessReviewFilterUsesPlatformSSARFirst(t *testing.T) {
 	}
 	if currentClusterReviewer.calls != 0 {
 		t.Fatalf("current-cluster reviewer calls = %d, want 0", currentClusterReviewer.calls)
+	}
+}
+
+// TestSubjectAccessReviewFilterReturnsForbiddenAfterPlatformAccessDenied verifies denied platform SSAR stays 403.
+func TestSubjectAccessReviewFilterReturnsForbiddenAfterPlatformAccessDenied(t *testing.T) {
+	platform := &fakePlatformReviewer{
+		selfStatus: &authnv1.SelfSubjectReviewStatus{
+			UserInfo: authnv1.UserInfo{
+				Username: "platform-user",
+			},
+		},
+		accessStatus: &authv1.SubjectAccessReviewStatus{
+			Allowed: false,
+			Reason:  "denied by platform",
+		},
+	}
+	tokenReviewer := &fakeTokenReviewer{
+		status: &authnv1.TokenReviewStatus{
+			Authenticated: true,
+			User: authnv1.UserInfo{
+				Username: "kubernetes-user",
+			},
+		},
+	}
+	authenticator, err := NewAuthenticator(Config{
+		PlatformURL: "https://platform.example.com",
+		ClusterName: "business",
+	}, WithPlatformReviewer(platform), WithTokenReviewer(tokenReviewer))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	currentClusterReviewer := &fakeSubjectAccessReviewer{}
+	filter := NewSubjectAccessReviewFilter(authenticator, currentClusterReviewer, AccessAttributesGetterFunc(func(_ context.Context, _ *restful.Request) (*AccessAttributes, error) {
+		return &AccessAttributes{
+			NonResourceAttributes: &authorizationPathAttributes,
+		}, nil
+	}))
+
+	called := false
+	container := restful.NewContainer()
+	service := new(restful.WebService)
+	service.Path("/").Produces(restful.MIME_JSON)
+	service.Route(service.GET("/").Filter(filter).To(func(_ *restful.Request, _ *restful.Response) {
+		called = true
+	}))
+	container.Add(service)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(AuthorizationHeader, "Bearer token")
+	req.Header.Set("Accept", restful.MIME_JSON)
+	recorder := httptest.NewRecorder()
+	container.ServeHTTP(recorder, req)
+
+	if called {
+		t.Fatalf("filter chain was called")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("response code = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if tokenReviewer.calls != 0 {
+		t.Fatalf("token reviewer calls = %d, want 0", tokenReviewer.calls)
+	}
+	if currentClusterReviewer.calls != 0 {
+		t.Fatalf("current-cluster reviewer calls = %d, want 0", currentClusterReviewer.calls)
+	}
+}
+
+// TestSubjectAccessReviewFilterRunsAfterPlatformAccessAllowed verifies container-based filter setup.
+func TestSubjectAccessReviewFilterRunsAfterPlatformAccessAllowed(t *testing.T) {
+	platform := &fakePlatformReviewer{
+		selfStatus: &authnv1.SelfSubjectReviewStatus{
+			UserInfo: authnv1.UserInfo{
+				Username: "platform-user",
+			},
+		},
+		accessStatus: &authv1.SubjectAccessReviewStatus{
+			Allowed: true,
+		},
+	}
+	authenticator, err := NewAuthenticator(Config{
+		PlatformURL: "https://platform.example.com",
+		ClusterName: "business",
+	}, WithPlatformReviewer(platform))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	filter := NewSubjectAccessReviewFilter(authenticator, &fakeSubjectAccessReviewer{}, AccessAttributesGetterFunc(func(_ context.Context, _ *restful.Request) (*AccessAttributes, error) {
+		return &AccessAttributes{
+			NonResourceAttributes: &authorizationPathAttributes,
+		}, nil
+	}))
+
+	called := false
+	container := restful.NewContainer()
+	service := new(restful.WebService)
+	service.Path("/").Produces(restful.MIME_JSON)
+	service.Route(service.GET("/").Filter(filter).To(func(_ *restful.Request, _ *restful.Response) {
+		called = true
+	}))
+	container.Add(service)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(AuthorizationHeader, "Bearer token")
+	req.Header.Set("Accept", restful.MIME_JSON)
+	recorder := httptest.NewRecorder()
+	container.ServeHTTP(recorder, req)
+
+	if !called {
+		t.Fatalf("filter chain was not called")
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("response code = %d, want %d", recorder.Code, http.StatusOK)
 	}
 }
 

@@ -49,7 +49,7 @@ type PlatformReviewer interface {
 // PlatformKubernetesReviewer creates platform-routed Kubernetes clients from a
 // base REST config and the request Bearer token.
 type PlatformKubernetesReviewer struct {
-	// BaseConfig contributes transport settings such as QPS, proxy, wrapper, and CA data.
+	// BaseConfig contributes transport settings such as QPS, proxy, and CA data.
 	BaseConfig *rest.Config
 	// PlatformURL is the ACP platform URL.
 	PlatformURL string
@@ -110,6 +110,20 @@ func (r *PlatformKubernetesReviewer) ReviewSelfSubjectAccess(ctx context.Context
 
 // clientsetForToken creates a Kubernetes clientset that uses the request token.
 func (r *PlatformKubernetesReviewer) clientsetForToken(rawToken string) (kubernetes.Interface, error) {
+	config, err := r.restConfigForToken(rawToken)
+	if err != nil {
+		return nil, err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create platform Kubernetes clientset: %w", err)
+	}
+	return clientset, nil
+}
+
+// restConfigForToken creates a platform REST config whose only credential is the request token.
+func (r *PlatformKubernetesReviewer) restConfigForToken(rawToken string) (*rest.Config, error) {
 	if r == nil {
 		return nil, fmt.Errorf("platform reviewer is nil")
 	}
@@ -121,24 +135,36 @@ func (r *PlatformKubernetesReviewer) clientsetForToken(rawToken string) (kuberne
 		return nil, fmt.Errorf("platformURL and clusterName are required for platform authentication")
 	}
 
-	config := &rest.Config{}
-	if r.BaseConfig != nil {
-		config = rest.CopyConfig(r.BaseConfig)
-	}
+	config := platformTransportConfig(r.BaseConfig)
 	config.Host = fmt.Sprintf("%s/kubernetes/%s", strings.TrimRight(r.PlatformURL, "/"), r.ClusterName)
 	config.BearerToken = rawToken
-	config.BearerTokenFile = ""
-	config.Username = ""
-	config.Password = ""
-	config.AuthProvider = nil
-	config.ExecProvider = nil
-	if r.InsecureSkipTLSVerify {
-		config.TLSClientConfig = rest.TLSClientConfig{Insecure: true}
+	config.TLSClientConfig.Insecure = r.InsecureSkipTLSVerify
+	return config, nil
+}
+
+// platformTransportConfig copies non-identity settings from a base REST config.
+func platformTransportConfig(base *rest.Config) *rest.Config {
+	config := &rest.Config{}
+	if base == nil {
+		return config
 	}
 
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create platform Kubernetes clientset: %w", err)
+	config.APIPath = base.APIPath
+	config.ContentConfig = base.ContentConfig
+	config.TLSClientConfig = rest.TLSClientConfig{
+		ServerName: base.TLSClientConfig.ServerName,
+		CAFile:     base.TLSClientConfig.CAFile,
+		CAData:     append([]byte{}, base.TLSClientConfig.CAData...),
+		NextProtos: append([]string{}, base.TLSClientConfig.NextProtos...),
 	}
-	return clientset, nil
+	config.UserAgent = base.UserAgent
+	config.DisableCompression = base.DisableCompression
+	config.QPS = base.QPS
+	config.Burst = base.Burst
+	config.RateLimiter = base.RateLimiter
+	config.WarningHandler = base.WarningHandler
+	config.Timeout = base.Timeout
+	config.Dial = base.Dial
+	config.Proxy = base.Proxy
+	return config
 }

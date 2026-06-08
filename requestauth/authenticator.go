@@ -208,13 +208,18 @@ func (a *Authenticator) AuthenticateAndAuthorize(ctx context.Context, rawToken s
 
 	failures := []backendFailure{}
 	if a.Config.PlatformAuthenticationEnabled() {
-		result, err := a.authenticateAndAuthorizePlatform(ctx, rawToken, attrs)
-		if err == nil {
+		result, err := a.authenticatePlatform(ctx, rawToken)
+		if err != nil {
+			logging.FromContext(ctx).Warnw("request authentication backend failed", "source", AuthenticationSourcePlatform, "error", err)
+			failures = append(failures, backendFailure{source: AuthenticationSourcePlatform, err: err})
+		} else {
+			if err := a.authorizePlatform(ctx, rawToken, attrs); err != nil {
+				logging.FromContext(ctx).Warnw("request authorization backend failed", "source", AuthenticationSourcePlatform, "user", result.User.GetName(), "error", err)
+				return nil, err
+			}
 			logging.FromContext(ctx).Infow("request authentication and authorization backend succeeded", "source", AuthenticationSourcePlatform, "user", result.User.GetName())
 			return result, nil
 		}
-		logging.FromContext(ctx).Warnw("request authentication and authorization backend failed", "source", AuthenticationSourcePlatform, "error", err)
-		failures = append(failures, backendFailure{source: AuthenticationSourcePlatform, err: err})
 	} else {
 		logging.FromContext(ctx).Debugw("request authentication and authorization backend skipped", "source", AuthenticationSourcePlatform, "reason", "disabled or missing platformURL/clusterName")
 	}
@@ -274,24 +279,20 @@ func (a *Authenticator) authenticatePlatform(ctx context.Context, rawToken strin
 	}, nil
 }
 
-// authenticateAndAuthorizePlatform validates a token and checks access through the platform API.
-func (a *Authenticator) authenticateAndAuthorizePlatform(ctx context.Context, rawToken string, attrs *AccessAttributes) (*AuthenticationResult, error) {
-	result, err := a.authenticatePlatform(ctx, rawToken)
-	if err != nil {
-		return nil, err
-	}
+// authorizePlatform checks access for an already authenticated platform token.
+func (a *Authenticator) authorizePlatform(ctx context.Context, rawToken string, attrs *AccessAttributes) error {
 	reviewer, err := a.platformReviewer()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	status, err := reviewer.ReviewSelfSubjectAccess(ctx, rawToken, attrs)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if status == nil || !status.Allowed {
-		return nil, accessDeniedError(attrs, status)
+		return accessDeniedError(attrs, status)
 	}
-	return result, nil
+	return nil
 }
 
 // authenticateOIDC validates a token through OIDC discovery and JWKS verification.
