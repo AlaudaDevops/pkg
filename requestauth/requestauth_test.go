@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package oidcauth
+package requestauth
 
 import (
 	"context"
@@ -56,18 +56,52 @@ func (r *fakeTokenReviewer) ReviewToken(_ context.Context, _ string, audiences [
 	return r.status, r.err
 }
 
+// fakePlatformReviewer returns configured platform self-review statuses for tests.
+type fakePlatformReviewer struct {
+	// selfStatus is returned from ReviewSelfSubject.
+	selfStatus *authnv1.SelfSubjectReviewStatus
+	// selfErr is returned from ReviewSelfSubject.
+	selfErr error
+	// accessStatus is returned from ReviewSelfSubjectAccess.
+	accessStatus *authv1.SubjectAccessReviewStatus
+	// accessErr is returned from ReviewSelfSubjectAccess.
+	accessErr error
+	// selfCalls records ReviewSelfSubject calls.
+	selfCalls int
+	// accessCalls records ReviewSelfSubjectAccess calls.
+	accessCalls int
+	// accessAttrs records the attributes passed to ReviewSelfSubjectAccess.
+	accessAttrs *AccessAttributes
+}
+
+// ReviewSelfSubject returns the configured fake platform authentication result.
+func (r *fakePlatformReviewer) ReviewSelfSubject(_ context.Context, _ string) (*authnv1.SelfSubjectReviewStatus, error) {
+	r.selfCalls++
+	return r.selfStatus, r.selfErr
+}
+
+// ReviewSelfSubjectAccess returns the configured fake platform authorization result.
+func (r *fakePlatformReviewer) ReviewSelfSubjectAccess(_ context.Context, _ string, attrs *AccessAttributes) (*authv1.SubjectAccessReviewStatus, error) {
+	r.accessCalls++
+	r.accessAttrs = attrs
+	return r.accessStatus, r.accessErr
+}
+
 // fakeSubjectAccessReviewer records SAR filter inputs for tests.
 type fakeSubjectAccessReviewer struct {
 	// user records the user passed to Review.
 	user user.Info
 	// attrs records the attributes passed to Review.
 	attrs *AccessAttributes
+	// calls records Review calls.
+	calls int
 	// err is returned from Review.
 	err error
 }
 
 // Review records the inputs and returns the configured error.
 func (r *fakeSubjectAccessReviewer) Review(_ context.Context, info user.Info, attrs *AccessAttributes) error {
+	r.calls++
 	r.user = info
 	r.attrs = attrs
 	return r.err
@@ -339,9 +373,10 @@ func TestAuthenticatorOIDC(t *testing.T) {
 		"iat":                now.Unix(),
 	})
 	authenticator, err := NewAuthenticator(Config{
-		IssuerURL: server.URL,
-		Audiences: []string{"client"},
-		Now:       func() time.Time { return now },
+		OIDCAuthentication: OIDCAuthenticationEnabled,
+		IssuerURL:          server.URL,
+		Audiences:          []string{"client"},
+		Now:                func() time.Time { return now },
 	}, WithHTTPClient(server.Client()))
 	if err != nil {
 		t.Fatalf("NewAuthenticator() error = %v", err)
@@ -424,8 +459,10 @@ func TestAuthenticatorOIDCDiscoveryUsesRequestTimeout(t *testing.T) {
 	defer close(release)
 
 	authenticator, err := NewAuthenticator(Config{
+		OIDCAuthentication: OIDCAuthenticationEnabled,
 		IssuerURL:          server.URL,
 		OIDCRequestTimeout: 25 * time.Millisecond,
+		KubernetesFallback: KubernetesFallbackDisabled,
 	}, WithHTTPClient(server.Client()))
 	if err != nil {
 		t.Fatalf("NewAuthenticator() error = %v", err)
@@ -488,10 +525,12 @@ func TestAuthenticatorOIDCJWKSUsesRequestTimeout(t *testing.T) {
 		"iat":                now.Unix(),
 	})
 	authenticator, err := NewAuthenticator(Config{
+		OIDCAuthentication: OIDCAuthenticationEnabled,
 		IssuerURL:          server.URL,
 		Audiences:          []string{"client"},
 		Now:                func() time.Time { return now },
 		OIDCRequestTimeout: 25 * time.Millisecond,
+		KubernetesFallback: KubernetesFallbackDisabled,
 	}, WithHTTPClient(server.Client()))
 	if err != nil {
 		t.Fatalf("NewAuthenticator() error = %v", err)
@@ -541,9 +580,10 @@ func TestAuthenticatorOIDCVerifierDoesNotCacheRequestContextValues(t *testing.T)
 		"iat":                now.Unix(),
 	})
 	authenticator, err := NewAuthenticator(Config{
-		IssuerURL: server.URL,
-		Audiences: []string{"client"},
-		Now:       func() time.Time { return now },
+		OIDCAuthentication: OIDCAuthenticationEnabled,
+		IssuerURL:          server.URL,
+		Audiences:          []string{"client"},
+		Now:                func() time.Time { return now },
 	}, WithHTTPClient(client))
 	if err != nil {
 		t.Fatalf("NewAuthenticator() error = %v", err)
@@ -584,9 +624,11 @@ func TestAuthenticatorOIDCAudienceMismatch(t *testing.T) {
 		"exp":                now.Add(time.Hour).Unix(),
 	})
 	authenticator, err := NewAuthenticator(Config{
-		IssuerURL: server.URL,
-		Audiences: []string{"client"},
-		Now:       func() time.Time { return now },
+		OIDCAuthentication: OIDCAuthenticationEnabled,
+		IssuerURL:          server.URL,
+		Audiences:          []string{"client"},
+		Now:                func() time.Time { return now },
+		KubernetesFallback: KubernetesFallbackDisabled,
 	}, WithHTTPClient(server.Client()))
 	if err != nil {
 		t.Fatalf("NewAuthenticator() error = %v", err)
@@ -595,6 +637,112 @@ func TestAuthenticatorOIDCAudienceMismatch(t *testing.T) {
 	_, err = authenticator.Authenticate(context.Background(), rawToken)
 	if !apierrors.IsUnauthorized(err) {
 		t.Fatalf("Authenticate() error = %v, want unauthorized", err)
+	}
+}
+
+// TestAuthenticatorOIDCDisabledByDefault verifies an issuer URL does not enable OIDC by itself.
+func TestAuthenticatorOIDCDisabledByDefault(t *testing.T) {
+	reviewer := &fakeTokenReviewer{
+		status: &authnv1.TokenReviewStatus{
+			Authenticated: true,
+			User: authnv1.UserInfo{
+				Username: "kubernetes-user",
+			},
+		},
+	}
+	authenticator, err := NewAuthenticator(Config{
+		IssuerURL: "https://issuer.example.com",
+	}, WithTokenReviewer(reviewer))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	result, err := authenticator.Authenticate(context.Background(), "token")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if result.Source != AuthenticationSourceKubernetes {
+		t.Fatalf("source = %s, want %s", result.Source, AuthenticationSourceKubernetes)
+	}
+	if result.User.GetName() != "kubernetes-user" {
+		t.Fatalf("user = %q, want kubernetes-user", result.User.GetName())
+	}
+}
+
+// TestAuthenticatorPlatformTakesPriority verifies platform authentication short-circuits later backends.
+func TestAuthenticatorPlatformTakesPriority(t *testing.T) {
+	platform := &fakePlatformReviewer{
+		selfStatus: &authnv1.SelfSubjectReviewStatus{
+			UserInfo: authnv1.UserInfo{
+				Username: "platform-user",
+				Groups:   []string{"platform-group"},
+			},
+		},
+	}
+	tokenReviewer := &fakeTokenReviewer{
+		err: fmt.Errorf("kubernetes fallback should not be called"),
+	}
+	authenticator, err := NewAuthenticator(Config{
+		PlatformURL:        "https://platform.example.com",
+		ClusterName:        "business",
+		IssuerURL:          "https://issuer.example.com",
+		OIDCAuthentication: OIDCAuthenticationEnabled,
+	}, WithPlatformReviewer(platform), WithTokenReviewer(tokenReviewer))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	result, err := authenticator.Authenticate(context.Background(), "token")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if result.Source != AuthenticationSourcePlatform {
+		t.Fatalf("source = %s, want %s", result.Source, AuthenticationSourcePlatform)
+	}
+	if result.User.GetName() != "platform-user" {
+		t.Fatalf("user = %q, want platform-user", result.User.GetName())
+	}
+	if platform.selfCalls != 1 {
+		t.Fatalf("platform self calls = %d, want 1", platform.selfCalls)
+	}
+	if tokenReviewer.audiences != nil {
+		t.Fatalf("token reviewer was called unexpectedly")
+	}
+}
+
+// TestAuthenticatorFallsBackAfterPlatformFailure verifies failed platform auth tries Kubernetes fallback.
+func TestAuthenticatorFallsBackAfterPlatformFailure(t *testing.T) {
+	platform := &fakePlatformReviewer{
+		selfErr: apierrors.NewUnauthorized("platform rejected token"),
+	}
+	tokenReviewer := &fakeTokenReviewer{
+		status: &authnv1.TokenReviewStatus{
+			Authenticated: true,
+			User: authnv1.UserInfo{
+				Username: "kubernetes-user",
+			},
+		},
+	}
+	authenticator, err := NewAuthenticator(Config{
+		PlatformURL: "https://platform.example.com",
+		ClusterName: "business",
+	}, WithPlatformReviewer(platform), WithTokenReviewer(tokenReviewer))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	result, err := authenticator.Authenticate(context.Background(), "token")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if result.Source != AuthenticationSourceKubernetes {
+		t.Fatalf("source = %s, want %s", result.Source, AuthenticationSourceKubernetes)
+	}
+	if result.User.GetName() != "kubernetes-user" {
+		t.Fatalf("user = %q, want kubernetes-user", result.User.GetName())
+	}
+	if platform.selfCalls != 1 {
+		t.Fatalf("platform self calls = %d, want 1", platform.selfCalls)
 	}
 }
 
@@ -771,6 +919,61 @@ func TestSubjectAccessReviewFilter(t *testing.T) {
 	}
 	if reviewer.attrs == nil || reviewer.attrs.NonResourceAttributes == nil {
 		t.Fatalf("reviewer attrs were not recorded")
+	}
+}
+
+// TestSubjectAccessReviewFilterUsesPlatformSSARFirst verifies platform authorization avoids current-cluster SAR.
+func TestSubjectAccessReviewFilterUsesPlatformSSARFirst(t *testing.T) {
+	platform := &fakePlatformReviewer{
+		selfStatus: &authnv1.SelfSubjectReviewStatus{
+			UserInfo: authnv1.UserInfo{
+				Username: "platform-user",
+			},
+		},
+		accessStatus: &authv1.SubjectAccessReviewStatus{
+			Allowed: true,
+		},
+	}
+	authenticator, err := NewAuthenticator(Config{
+		PlatformURL: "https://platform.example.com",
+		ClusterName: "business",
+	}, WithPlatformReviewer(platform))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	currentClusterReviewer := &fakeSubjectAccessReviewer{}
+	filter := NewSubjectAccessReviewFilter(authenticator, currentClusterReviewer, AccessAttributesGetterFunc(func(_ context.Context, _ *restful.Request) (*AccessAttributes, error) {
+		return &AccessAttributes{
+			NonResourceAttributes: &authorizationPathAttributes,
+		}, nil
+	}))
+
+	req := restful.NewRequest(httptest.NewRequest(http.MethodGet, "/", nil))
+	req.Request.Header.Set(AuthorizationHeader, "Bearer token")
+	resp := restful.NewResponse(httptest.NewRecorder())
+
+	called := false
+	filter(req, resp, &restful.FilterChain{
+		Target: func(req *restful.Request, _ *restful.Response) {
+			called = true
+			result := AuthenticationResultFromContext(req.Request.Context())
+			if result == nil || result.Source != AuthenticationSourcePlatform {
+				t.Fatalf("authentication result source = %v, want platform", result)
+			}
+		},
+	})
+	if !called {
+		t.Fatalf("filter chain was not called")
+	}
+	if platform.selfCalls != 1 || platform.accessCalls != 1 {
+		t.Fatalf("platform calls = self:%d access:%d, want 1/1", platform.selfCalls, platform.accessCalls)
+	}
+	if platform.accessAttrs == nil || platform.accessAttrs.NonResourceAttributes == nil {
+		t.Fatalf("platform access attrs were not recorded")
+	}
+	if currentClusterReviewer.calls != 0 {
+		t.Fatalf("current-cluster reviewer calls = %d, want 0", currentClusterReviewer.calls)
 	}
 }
 

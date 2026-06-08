@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package oidcauth
+package requestauth
 
 import (
 	"context"
@@ -24,8 +24,8 @@ import (
 	"github.com/emicklei/go-restful/v3"
 	authv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/authentication/user"
+	apiserverrequest "k8s.io/apiserver/pkg/endpoints/request"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -95,39 +95,70 @@ func (r *KubernetesSubjectAccessReviewer) Review(ctx context.Context, info user.
 		return nil
 	}
 
-	resource := schema.GroupResource{Group: "authorization.k8s.io", Resource: "subjectaccessreviews"}
-	name := ""
-	verb := ""
-	if attrs.ResourceAttributes != nil {
-		resource = schema.GroupResource{
-			Group:    attrs.ResourceAttributes.Group,
-			Resource: attrs.ResourceAttributes.Resource,
-		}
-		name = attrs.ResourceAttributes.Name
-		verb = attrs.ResourceAttributes.Verb
-	}
-	if attrs.NonResourceAttributes != nil {
-		name = attrs.NonResourceAttributes.Path
-		verb = attrs.NonResourceAttributes.Verb
-	}
-
-	message := fmt.Sprintf("access not allowed, verb=%s", verb)
-	if review.Status.EvaluationError != "" {
-		message = fmt.Sprintf("%s, evaluationError=%s", message, review.Status.EvaluationError)
-	}
-	if review.Status.Reason != "" {
-		message = fmt.Sprintf("%s, reason=%s", message, review.Status.Reason)
-	}
-	return apierrors.NewForbidden(resource, name, fmt.Errorf("%s", message))
+	return accessDeniedError(attrs, &review.Status)
 }
 
-// NewSubjectAccessReviewFilter returns a filter that authenticates and authorizes by SAR.
-// The component ServiceAccount must be allowed to create authorization.k8s.io
-// SubjectAccessReview resources. If the authenticator uses Kubernetes TokenReview fallback,
-// it must also be allowed to create authentication.k8s.io TokenReview resources.
+// NewSubjectAccessReviewFilter returns a go-restful filter that authenticates
+// and authorizes Bearer token requests.
+//
+// When authenticator implements TokenAccessAuthenticator, the authenticator owns
+// the full ordered backend chain. For the built-in Authenticator this means:
+// platform SelfSubjectReview plus platform SelfSubjectAccessReview first,
+// explicit OIDC verification plus current-cluster SubjectAccessReview second,
+// and current-cluster TokenReview plus current-cluster SubjectAccessReview last.
+//
+// The permission requirements depend on which backend succeeds:
+//
+//   - Platform backend: the original token user must be accepted by the
+//     platform-routed Kubernetes API and be allowed to create
+//     selfsubjectreviews.authentication.k8s.io and
+//     selfsubjectaccessreviews.authorization.k8s.io there. The component
+//     ServiceAccount does not need platform review permissions because the
+//     request is sent as the original token.
+//   - OIDC backend: the component ServiceAccount must create
+//     subjectaccessreviews.authorization.k8s.io in the current cluster.
+//   - Kubernetes fallback: the component ServiceAccount must create
+//     tokenreviews.authentication.k8s.io and
+//     subjectaccessreviews.authorization.k8s.io in the current cluster.
+//
+// If authenticator does not implement TokenAccessAuthenticator, the filter keeps
+// the older two-step behavior: authenticate first, then call reviewer.Review for
+// the authenticated user.
 func NewSubjectAccessReviewFilter(authenticator TokenAuthenticator, reviewer SubjectAccessReviewer, getter AccessAttributesGetter) restful.FilterFunction {
 	authnFilter := NewAuthenticationFilter(authenticator)
 	return func(req *restful.Request, resp *restful.Response, chain *restful.FilterChain) {
+		if accessAuthenticator, ok := authenticator.(TokenAccessAuthenticator); ok {
+			rawToken, err := BearerTokenFromRequest(req)
+			if err != nil {
+				kerrors.HandleError(req, resp, err)
+				return
+			}
+			if getter == nil {
+				kerrors.HandleError(req, resp, fmt.Errorf("AccessAttributesGetter is nil"))
+				return
+			}
+			attrs, err := getter.GetAccessAttributes(req.Request.Context(), req)
+			if err != nil {
+				kerrors.HandleError(req, resp, err)
+				return
+			}
+			result, err := accessAuthenticator.AuthenticateAndAuthorize(req.Request.Context(), rawToken, attrs, reviewer)
+			if err != nil {
+				kerrors.HandleError(req, resp, err)
+				return
+			}
+			if result == nil || result.User == nil {
+				kerrors.HandleError(req, resp, apierrors.NewUnauthorized("request authentication did not return a user"))
+				return
+			}
+
+			reqCtx := apiserverrequest.WithUser(req.Request.Context(), result.User)
+			reqCtx = WithAuthenticationResult(reqCtx, result)
+			req.Request = req.Request.WithContext(reqCtx)
+			chain.ProcessFilter(req, resp)
+			return
+		}
+
 		authnFilter(req, resp, &restful.FilterChain{
 			Target: func(authenticatedReq *restful.Request, authenticatedResp *restful.Response) {
 				result := AuthenticationResultFromContext(authenticatedReq.Request.Context())
