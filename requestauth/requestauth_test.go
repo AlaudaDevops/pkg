@@ -833,6 +833,64 @@ func TestAuthenticateAndAuthorizeStopsAfterPlatformAccessDenied(t *testing.T) {
 	}
 }
 
+// TestAuthenticateAndAuthorizeStopsAfterOIDCAccessDenied verifies OIDC authorization denial is final.
+func TestAuthenticateAndAuthorizeStopsAfterOIDCAccessDenied(t *testing.T) {
+	now := time.Unix(2000, 0)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+
+	server := newOIDCTestServer(t, key)
+	defer server.Close()
+
+	rawToken := signedOIDCToken(t, key, jwt.MapClaims{
+		"iss":                server.URL,
+		"sub":                "sub-1",
+		"aud":                "client",
+		"preferred_username": "dev",
+		"exp":                now.Add(time.Hour).Unix(),
+		"iat":                now.Unix(),
+	})
+	tokenReviewer := &fakeTokenReviewer{
+		status: &authnv1.TokenReviewStatus{
+			Authenticated: true,
+			User: authnv1.UserInfo{
+				Username: "kubernetes-user",
+			},
+		},
+	}
+	authenticator, err := NewAuthenticator(Config{
+		OIDCAuthentication: OIDCAuthenticationEnabled,
+		IssuerURL:          server.URL,
+		Audiences:          []string{"client"},
+		Now:                func() time.Time { return now },
+	}, WithHTTPClient(server.Client()), WithTokenReviewer(tokenReviewer))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	currentClusterReviewer := &fakeSubjectAccessReviewer{
+		err: apierrors.NewForbidden(schema.GroupResource{Resource: "deployments"}, "web", fmt.Errorf("denied by current cluster")),
+	}
+	result, err := authenticator.AuthenticateAndAuthorize(context.Background(), rawToken, validAccessAttributes(), currentClusterReviewer)
+	if !apierrors.IsForbidden(err) {
+		t.Fatalf("AuthenticateAndAuthorize() error = %v, want forbidden", err)
+	}
+	if result != nil {
+		t.Fatalf("AuthenticateAndAuthorize() result = %v, want nil", result)
+	}
+	if currentClusterReviewer.calls != 1 {
+		t.Fatalf("current-cluster reviewer calls = %d, want 1", currentClusterReviewer.calls)
+	}
+	if currentClusterReviewer.user == nil || currentClusterReviewer.user.GetName() != "dev" {
+		t.Fatalf("current-cluster reviewer user = %v, want dev", currentClusterReviewer.user)
+	}
+	if tokenReviewer.calls != 0 {
+		t.Fatalf("token reviewer calls = %d, want 0", tokenReviewer.calls)
+	}
+}
+
 // TestAuthenticateAndAuthorizeFallsBackAfterPlatformAuthenticationFailure verifies authn failures still fall back.
 func TestAuthenticateAndAuthorizeFallsBackAfterPlatformAuthenticationFailure(t *testing.T) {
 	platform := &fakePlatformReviewer{

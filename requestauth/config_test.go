@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -228,6 +229,54 @@ func TestConfigHTTPClientWithCustomCAs(t *testing.T) {
 		t.Fatalf("HTTPClient() CAFile error = %v", err)
 	}
 	assertTLSRootCAs(t, fileClient)
+}
+
+// TestConfigHTTPClientWithCustomCAPreservesDefaultTransport verifies proxy and default transport settings survive custom CAs.
+func TestConfigHTTPClientWithCustomCAPreservesDefaultTransport(t *testing.T) {
+	certPEM := newTestCertificatePEM(t)
+	proxyURL, err := url.Parse("http://proxy.example.com:8080")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	originalTransport := http.DefaultTransport
+	defaultTransport := &http.Transport{
+		Proxy: func(_ *http.Request) (*url.URL, error) {
+			return proxyURL, nil
+		},
+		ForceAttemptHTTP2: true,
+		MaxIdleConns:      17,
+	}
+	http.DefaultTransport = defaultTransport
+	t.Cleanup(func() {
+		http.DefaultTransport = originalTransport
+	})
+
+	client, err := Config{CAData: certPEM}.HTTPClient()
+	if err != nil {
+		t.Fatalf("HTTPClient() error = %v", err)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *http.Transport", client.Transport)
+	}
+	if transport == defaultTransport {
+		t.Fatalf("custom CA client reused http.DefaultTransport directly")
+	}
+	gotProxy, err := transport.Proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: "issuer.example.com"}})
+	if err != nil {
+		t.Fatalf("transport proxy error = %v", err)
+	}
+	if gotProxy == nil || gotProxy.String() != proxyURL.String() {
+		t.Fatalf("transport proxy = %v, want %s", gotProxy, proxyURL)
+	}
+	if !transport.ForceAttemptHTTP2 || transport.MaxIdleConns != defaultTransport.MaxIdleConns {
+		t.Fatalf("default transport settings were not preserved")
+	}
+	if defaultTransport.TLSClientConfig != nil && defaultTransport.TLSClientConfig.RootCAs != nil {
+		t.Fatalf("http.DefaultTransport RootCAs were mutated")
+	}
+	assertTLSRootCAs(t, client)
 }
 
 // TestConfigHTTPClientRejectsInvalidCAs verifies CA parse and read failures.

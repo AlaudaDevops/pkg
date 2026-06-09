@@ -184,7 +184,7 @@ type authenticationBackend struct {
 	authenticate func(context.Context, string) (*AuthenticationResult, error)
 	// authorize optionally authorizes a successfully authenticated identity.
 	authorize func(context.Context, string, *AuthenticationResult) error
-	// terminalAuthorizationFailure keeps platform authorization denial final.
+	// terminalAuthorizationFailure keeps authorization errors final after authentication succeeds.
 	terminalAuthorizationFailure bool
 }
 
@@ -240,6 +240,7 @@ func currentClusterAccessBackend(source AuthenticationSource, enabled bool, auth
 		authorize: func(ctx context.Context, _ string, result *AuthenticationResult) error {
 			return reviewAuthenticatedAccess(ctx, reviewer, result.User, attrs)
 		},
+		terminalAuthorizationFailure: true,
 	}
 }
 

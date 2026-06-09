@@ -55,11 +55,13 @@ limitations under the License.
 //     be allowed to create subjectaccessreviews.authorization.k8s.io, because
 //     the returned TokenReview user is authorized with a SubjectAccessReview.
 //
-// Backends are tried strictly in the order above. A failed or unavailable
-// backend is logged and the next enabled backend is attempted. The request is
-// accepted as soon as one backend succeeds. If every enabled backend fails, the
-// package returns the collected failure to the caller without logging or
-// returning the raw token.
+// Backends are tried strictly in the order above. Authentication failures and
+// unavailable backends are logged and the next enabled backend is attempted.
+// The request is accepted as soon as one backend succeeds. In authorization
+// filters, authorization errors after a backend authenticates the request are
+// final and later backends are not attempted. If every enabled backend fails
+// authentication, the package returns the collected failure to the caller
+// without logging or returning the raw token.
 package requestauth
 
 import (
@@ -334,11 +336,21 @@ func (c Config) HTTPClient() (*http.Client, error) {
 		}
 	}
 
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("default HTTP transport is %T, want *http.Transport", http.DefaultTransport)
+	}
+	transport := defaultTransport.Clone()
+	tlsConfig := &tls.Config{}
+	if transport.TLSClientConfig != nil {
+		tlsConfig = transport.TLSClientConfig.Clone()
+	}
+	tlsConfig.RootCAs = pool
+	transport.TLSClientConfig = tlsConfig
+
 	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: pool},
-		},
-		Timeout: timeout,
+		Transport: transport,
+		Timeout:   timeout,
 	}, nil
 }
 
