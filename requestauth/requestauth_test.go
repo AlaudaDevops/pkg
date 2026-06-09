@@ -40,6 +40,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/authentication/user"
 	apiserverrequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
@@ -1115,6 +1116,41 @@ func TestPlatformReviewerRestConfigForTokenDropsCopiedCredentials(t *testing.T) 
 	}
 	if gotProxyURL.String() != proxyURL.String() {
 		t.Fatalf("proxy URL = %q, want %q", gotProxyURL.String(), proxyURL.String())
+	}
+}
+
+// TestPlatformReviewerRestConfigForTokenDropsCAWhenInsecure verifies client-go accepts insecure platform configs.
+func TestPlatformReviewerRestConfigForTokenDropsCAWhenInsecure(t *testing.T) {
+	baseConfig := &rest.Config{
+		TLSClientConfig: rest.TLSClientConfig{
+			ServerName: "platform.internal",
+			CAFile:     "/path/to/ca.crt",
+			CAData:     []byte("ca-data"),
+			NextProtos: []string{"h2"},
+		},
+	}
+	reviewer := &PlatformKubernetesReviewer{
+		BaseConfig:            baseConfig,
+		PlatformURL:           "https://platform.example.com",
+		ClusterName:           "business",
+		InsecureSkipTLSVerify: true,
+	}
+
+	config, err := reviewer.restConfigForToken("request-token")
+	if err != nil {
+		t.Fatalf("restConfigForToken() error = %v", err)
+	}
+	if !config.TLSClientConfig.Insecure {
+		t.Fatalf("insecure TLS = false, want true")
+	}
+	if config.TLSClientConfig.CAFile != "" || len(config.TLSClientConfig.CAData) != 0 {
+		t.Fatalf("root CA settings were preserved with insecure TLS: %#v", config.TLSClientConfig)
+	}
+	if config.TLSClientConfig.ServerName != "platform.internal" || len(config.TLSClientConfig.NextProtos) != 1 || config.TLSClientConfig.NextProtos[0] != "h2" {
+		t.Fatalf("non-CA TLS settings were not preserved: %#v", config.TLSClientConfig)
+	}
+	if _, err := kubernetes.NewForConfig(config); err != nil {
+		t.Fatalf("kubernetes.NewForConfig() error = %v", err)
 	}
 }
 

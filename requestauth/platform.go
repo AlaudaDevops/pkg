@@ -139,6 +139,11 @@ func (r *PlatformKubernetesReviewer) restConfigForToken(rawToken string) (*rest.
 	config.Host = fmt.Sprintf("%s/kubernetes/%s", strings.TrimRight(r.PlatformURL, "/"), r.ClusterName)
 	config.BearerToken = rawToken
 	config.TLSClientConfig.Insecure = r.InsecureSkipTLSVerify
+	if config.TLSClientConfig.Insecure {
+		// client-go rejects REST configs that set both Insecure and root CAs.
+		config.TLSClientConfig.CAFile = ""
+		config.TLSClientConfig.CAData = nil
+	}
 	return config, nil
 }
 
