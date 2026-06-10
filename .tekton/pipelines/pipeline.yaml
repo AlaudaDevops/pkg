@@ -155,9 +155,20 @@ spec:
             export GOMAXPROCS=4
             if [ "$GOCACHE" != "" ]; then
               export TOOLBIN=$GOCACHE/../toolbin
-              mkdir -p $TOOLBIN
-              ls -la $TOOLBIN
+              export ENVTEST_ASSETS_DIR=$GOCACHE/../envtest-binaries
+            else
+              export TOOLBIN="$(pwd)/bin"
+              export ENVTEST_ASSETS_DIR="$(pwd)/bin/envtest-binaries"
             fi
+            mkdir -p "$TOOLBIN" "$ENVTEST_ASSETS_DIR"
+            ls -la "$TOOLBIN"
+
+            if [ ! -x "$TOOLBIN/setup-envtest-v0.24.1" ]; then
+              GOBIN="$TOOLBIN" go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.24.1
+              mv "$TOOLBIN/setup-envtest" "$TOOLBIN/setup-envtest-v0.24.1"
+            fi
+            export KUBEBUILDER_ASSETS="$("$TOOLBIN/setup-envtest-v0.24.1" use --bin-dir "$ENVTEST_ASSETS_DIR" -p path 1.31.0)"
+            echo "KUBEBUILDER_ASSETS=$KUBEBUILDER_ASSETS"
 
             make test
             make htmlreport
@@ -169,7 +180,7 @@ spec:
           value:
             - passed-tests-rate=100
         - name: tool-image
-          value: registry.alauda.cn:60080/devops/builder-go:latest
+          value: registry.alauda.cn:60080/devops/github/builder-go:latest
     - name: golangci-lint
       timeout: 30m
       runAfter:
@@ -198,7 +209,7 @@ spec:
         - name: quality-gate
           value: "false"
         - name: tool-image
-          value: registry.alauda.cn:60080/devops/builder-go:latest
+          value: registry.alauda.cn:60080/devops/nonroot/golangci/golangci-lint:latest
 
     - name: sonar-scan
       runAfter:
@@ -273,7 +284,7 @@ spec:
             - "./bin/vulncheck.txt"
 
         - name: tool-image
-          value: registry.alauda.cn:60080/devops/builder-go:latest
+          value: registry.alauda.cn:60080/devops/github/builder-go:latest
     ### security scan
     - name: trivy-repo-scan
       timeout: 30m
@@ -319,7 +330,7 @@ spec:
           value:
             - "./bin/trivy-report.json"
         - name: tool-image
-          value: registry.alauda.cn:60080/devops/builder-go:latest
+          value: registry.alauda.cn:60080/devops/github/builder-go:latest
   finally:
     - name: upload-test-report
       timeout: 30m
