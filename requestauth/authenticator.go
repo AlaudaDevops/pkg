@@ -43,6 +43,11 @@ const (
 	AuthenticationSourceKubernetes AuthenticationSource = "kubernetes"
 )
 
+const (
+	// oidcUnavailableMessage is the client-safe message for OIDC upstream failures.
+	oidcUnavailableMessage = "OIDC authentication service is unavailable"
+)
+
 // AuthenticationSource identifies the authentication backend that accepted a token.
 type AuthenticationSource string
 
@@ -342,7 +347,7 @@ func (a *Authenticator) authorizePlatform(ctx context.Context, rawToken string, 
 func (a *Authenticator) authenticateOIDC(ctx context.Context, rawToken string) (*AuthenticationResult, error) {
 	verifier, err := a.oidcVerifier(ctx)
 	if err != nil {
-		return nil, apierrors.NewServiceUnavailable(fmt.Sprintf("OIDC discovery failed: %v", err))
+		return nil, oidcServiceUnavailableError(ctx, "discovery", err)
 	}
 
 	verifyCtx, cancel := context.WithTimeout(ctx, a.Config.oidcRequestTimeout())
@@ -352,7 +357,7 @@ func (a *Authenticator) authenticateOIDC(ctx context.Context, rawToken string) (
 	idToken, err := verifier.Verify(oidcCtx, rawToken)
 	if err != nil {
 		if strings.Contains(err.Error(), "fetching keys") {
-			return nil, apierrors.NewServiceUnavailable(fmt.Sprintf("OIDC JWKS verification failed: %v", err))
+			return nil, oidcServiceUnavailableError(ctx, "jwks", err)
 		}
 		return nil, apierrors.NewUnauthorized("OIDC token verification failed")
 	}
@@ -381,6 +386,12 @@ func (a *Authenticator) authenticateOIDC(ctx context.Context, rawToken string) (
 		Token:  verified,
 		Source: AuthenticationSourceOIDC,
 	}, nil
+}
+
+// oidcServiceUnavailableError logs the internal OIDC failure and returns a safe API error.
+func oidcServiceUnavailableError(ctx context.Context, stage string, err error) error {
+	logging.FromContext(ctx).Warnw("OIDC authentication backend unavailable", "stage", stage, "error", err)
+	return apierrors.NewServiceUnavailable(oidcUnavailableMessage)
 }
 
 // authenticateKubernetes validates a token through the current cluster TokenReview API.

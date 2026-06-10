@@ -534,10 +534,11 @@ func TestAuthenticatorOIDCDiscoveryUsesRequestTimeout(t *testing.T) {
 		t.Fatalf("NewAuthenticator() error = %v", err)
 	}
 
-	assertServiceUnavailableWithin(t, func() error {
+	err = assertServiceUnavailableWithin(t, func() error {
 		_, err := authenticator.Authenticate(context.Background(), "token")
 		return err
 	})
+	assertOIDCUnavailableMessageIsSafe(t, err.Error(), server.URL, "context deadline exceeded")
 }
 
 // TestAuthenticatorOIDCJWKSUsesRequestTimeout verifies JWKS refresh cannot block forever.
@@ -588,10 +589,11 @@ func TestAuthenticatorOIDCJWKSUsesRequestTimeout(t *testing.T) {
 		t.Fatalf("NewAuthenticator() error = %v", err)
 	}
 
-	assertServiceUnavailableWithin(t, func() error {
+	err = assertServiceUnavailableWithin(t, func() error {
 		_, err := authenticator.Authenticate(context.Background(), rawToken)
 		return err
 	})
+	assertOIDCUnavailableMessageIsSafe(t, err.Error(), server.URL, "fetching keys", "context deadline exceeded")
 }
 
 // TestAuthenticatorOIDCVerifierDoesNotCacheRequestContextValues verifies cached JWKS clients avoid request-scoped values.
@@ -1348,6 +1350,43 @@ func TestAuthenticationFilterErrors(t *testing.T) {
 	}
 }
 
+// TestAuthenticationFilterHidesOIDCUpstreamErrorDetails verifies OIDC backend details stay out of HTTP responses.
+func TestAuthenticationFilterHidesOIDCUpstreamErrorDetails(t *testing.T) {
+	discoveryLeak := "issuer backend exploded at https://internal-host.local/keys"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, req)
+			return
+		}
+		http.Error(w, discoveryLeak, http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	authenticator, err := NewAuthenticator(Config{
+		OIDCAuthentication: OIDCAuthenticationEnabled,
+		IssuerURL:          server.URL,
+		KubernetesFallback: KubernetesFallbackDisabled,
+	}, WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewAuthenticator() error = %v", err)
+	}
+
+	req, resp, recorder := newFilterRequest("Bearer token")
+	called := false
+	NewAuthenticationFilter(authenticator)(req, resp, &restful.FilterChain{
+		Target: func(_ *restful.Request, _ *restful.Response) {
+			called = true
+		},
+	})
+	if called {
+		t.Fatalf("filter chain was called")
+	}
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("response code = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	assertOIDCUnavailableMessageIsSafe(t, recorder.Body.String(), discoveryLeak, server.URL, "internal-host.local")
+}
+
 // TestSubjectAccessReviewFilter verifies authn plus SAR filter behavior.
 func TestSubjectAccessReviewFilter(t *testing.T) {
 	authenticator, err := NewAuthenticator(Config{}, WithTokenReviewer(&fakeTokenReviewer{
@@ -1740,7 +1779,7 @@ func newFilterRequest(authorization string) (*restful.Request, *restful.Response
 }
 
 // assertServiceUnavailableWithin verifies an OIDC upstream timeout returns promptly.
-func assertServiceUnavailableWithin(t *testing.T, run func() error) {
+func assertServiceUnavailableWithin(t *testing.T, run func() error) error {
 	t.Helper()
 
 	resultCh := make(chan error, 1)
@@ -1757,8 +1796,24 @@ func assertServiceUnavailableWithin(t *testing.T, run func() error) {
 		if elapsed := time.Since(started); elapsed > time.Second {
 			t.Fatalf("Authenticate() elapsed = %v, want bounded by OIDC timeout", elapsed)
 		}
+		return err
 	case <-time.After(time.Second):
 		t.Fatalf("Authenticate() did not return within the OIDC timeout")
+	}
+	return nil
+}
+
+// assertOIDCUnavailableMessageIsSafe verifies OIDC upstream failures expose only the safe client message.
+func assertOIDCUnavailableMessageIsSafe(t *testing.T, message string, forbidden ...string) {
+	t.Helper()
+
+	if !strings.Contains(message, oidcUnavailableMessage) {
+		t.Fatalf("message = %q, want %q", message, oidcUnavailableMessage)
+	}
+	for _, fragment := range forbidden {
+		if strings.Contains(message, fragment) {
+			t.Fatalf("message = %q, must not contain %q", message, fragment)
+		}
 	}
 }
 
